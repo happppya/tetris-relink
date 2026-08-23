@@ -1,0 +1,10 @@
+C:\Users\axlu8\Documents\code\tetris-liberation\vendor\cc2-wasm\target\debug\deps\futures_channel-a1f350c45289f589.d: C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\lib.rs C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\lock.rs C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\mpsc\mod.rs C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\mpsc\queue.rs C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\mpsc\sink_impl.rs C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\oneshot.rs
+
+C:\Users\axlu8\Documents\code\tetris-liberation\vendor\cc2-wasm\target\debug\deps\libfutures_channel-a1f350c45289f589.rmeta: C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\lib.rs C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\lock.rs C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\mpsc\mod.rs C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\mpsc\queue.rs C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\mpsc\sink_impl.rs C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\oneshot.rs
+
+C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\lib.rs:
+C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\lock.rs:
+C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\mpsc\mod.rs:
+C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\mpsc\queue.rs:
+C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\mpsc\sink_impl.rs:
+C:\Users\axlu8\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-channel-0.3.34\src\oneshot.rs:

@@ -1,0 +1,16 @@
+{
+  "name": "cc2-wasm",
+  "type": "module",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "files": [
+    "cc2_wasm_bg.wasm",
+    "cc2_wasm.js",
+    "cc2_wasm.d.ts"
+  ],
+  "main": "cc2_wasm.js",
+  "types": "cc2_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
