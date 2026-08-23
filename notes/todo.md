@@ -111,3 +111,18 @@ Status legend: [ ] todo · [~] in progress · [x] done
 - [x] Fixed-timestep simulation loop decoupled from render (60Hz accumulator)
 - [x] Unit tests (Vitest): 7-bag distribution, SRS kick tables + rotation, DAS/ARR timing, SDF, scoring, line clears, garbage, attack/combo/streak math, spin detection
 - [x] Lint configured (oxlint); Prettier optional
+
+## 8. Practice tools (see notes/practice-design.md)
+
+- [x] Drill system in zen mode: preset board scenarios with fixed piece queues and measurable goals (`src/engine/drills.ts`)
+  - [x] T-spin drills: TSD classic notch + mirror pocket (solvable under SRS first-fit kicks, proven by BFS test)
+  - [x] Perfect clear drill: PCO first PC within ~2 bags
+  - [x] Opener drills: TKI 3-stack and DT Cannon fixed first bags
+  - [x] Stacking drills: FLAT STACK (fail on hole) and WELL DISCIPLINE (3 tetrises)
+- [x] Engine support: `Game` accepts `initialBoard` and `fixedQueue`; bag consumes a fixed prefix before randomness
+- [x] Live stack analyzer in zen HUD: holes, bumpiness, peak height (`src/engine/stackstats.ts`)
+- [x] Drill HUD panel: objective, progress counters, max-piece countdown; complete/failed overlays with retry / free-play actions
+- [x] Drill teaching text: per-drill blurb + tips shown in the zen setup sidebar
+- [ ] Finesse trainer (finesse error counting) — future, see practice-design.md
+- [ ] TST / TSS presets with multi-piece solvability validation — future
+- [ ] Custom board editor for user-defined drills — future

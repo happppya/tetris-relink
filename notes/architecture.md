@@ -13,6 +13,8 @@ src/
     srs.ts           # rotation + kick tables, collision, ghost
     scoring.ts       # guideline scores, gravity curve, blitz bonuses
     attack.ts        # attack table config, combo/streak math
+    drills.ts        # practice drill catalog: preset boards, fixed queues, goals
+    stackstats.ts    # stack quality metrics: holes, bumpiness, heights, stack top
     game.ts          # core simulation: tick(input) -> events
   game/
     runner.ts        # fixed-timestep accumulator, mode end detection

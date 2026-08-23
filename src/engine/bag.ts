@@ -32,9 +32,11 @@ export class Bag {
   private queue: PieceType[] = []
   private rng: Rng
 
-  constructor(rng: Rng) {
+  constructor(rng: Rng, prefix: readonly PieceType[] = []) {
     this.rng = rng
     this.refill()
+    // fixed pieces (drills) are consumed before any randomness
+    this.queue.unshift(...prefix)
   }
 
   private refill() {

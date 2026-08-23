@@ -83,6 +83,10 @@ export interface GameOptions {
   sendsGarbage?: boolean
   mode?: GameMode
   cheeseRows?: number
+  /** pre-stacked board (TOTAL_H rows, bottom row last); used by practice drills */
+  initialBoard?: Cell[][]
+  /** pieces drawn in order before the bag randomness takes over */
+  fixedQueue?: PieceType[]
 }
 
 interface SpinCheck {
@@ -185,8 +189,13 @@ export class Game {
   private cheeseHoles: number[] = []
 
   constructor(opts: GameOptions = {}) {
-    this.board = Array.from({ length: TOTAL_H }, () => Array<Cell>(BOARD_W).fill(null))
-    this.bag = new Bag(mulberry32(opts.seed ?? ((Math.random() * 2 ** 31) | 0)))
+    this.board = opts.initialBoard
+      ? opts.initialBoard.map((row) => [...row])
+      : Array.from({ length: TOTAL_H }, () => Array<Cell>(BOARD_W).fill(null))
+    if (this.board.length !== TOTAL_H || this.board.some((row) => row.length !== BOARD_W)) {
+      throw new Error('initialBoard must be a TOTAL_H x BOARD_W grid')
+    }
+    this.bag = new Bag(mulberry32(opts.seed ?? ((Math.random() * 2 ** 31) | 0)), opts.fixedQueue ?? [])
     this.handling = { ...DEFAULT_HANDLING, ...opts.handling }
     this.attackCfg = { ...DEFAULT_ATTACK, ...opts.attack }
     this.scoringCfg = { ...DEFAULT_SCORING, ...opts.scoring }
