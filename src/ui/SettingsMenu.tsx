@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSettings, ACTION_LABELS, msToFrames, serializeSettings } from '../state/settings'
 import { BOT_PROFILES } from '../ai/profiles'
+import { EFFECT_LEVELS } from '../render/effects'
 import type { InputAction } from '../engine/types'
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -234,9 +235,27 @@ export function SettingsMenu({ onBack }: { onBack: () => void }) {
         </Section>
 
         <Section title="VISUAL EFFECTS" onReset={s.resetVisuals}>
-          <Row label="Particles">
-            <Toggle value={s.particles} onChange={(v) => s.update({ particles: v })} />
+          <Row label="Effects level">
+            <span className="flex flex-wrap justify-end gap-1">
+              {EFFECT_LEVELS.map((l) => (
+                <button
+                  key={l.level}
+                  onClick={() => s.update({ effectsLevel: l.level })}
+                  title={l.desc}
+                  className={`border px-2 py-0.5 text-xs ${
+                    s.effectsLevel === l.level
+                      ? 'border-neutral-300 text-neutral-100'
+                      : 'border-neutral-700 text-neutral-500 hover:border-neutral-400'
+                  }`}
+                >
+                  {l.level}
+                </button>
+              ))}
+            </span>
           </Row>
+          <p className="py-1 text-right font-mono text-xs text-neutral-500">
+            {EFFECT_LEVELS.find((l) => l.level === s.effectsLevel)?.desc}
+          </p>
           <Row label="Screen shake">
             <Toggle value={s.shake} onChange={(v) => s.update({ shake: v })} />
           </Row>

@@ -4,7 +4,7 @@ import { InputManager } from '../game/input'
 import { useSettings, msToFrames } from '../state/settings'
 import { useStats } from '../state/stats'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
-import { ParticleSystem } from '../render/particles'
+import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, clearLabels } from '../render/cleartext'
 import type { GameEvent } from '../engine/game'
 import type { InputAction } from '../engine/types'
@@ -50,9 +50,10 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
 
     let pausedLocal = false
     let done = false
-    const particles = new ParticleSystem()
+    const fx = new EffectsSystem(settings.effectsLevel)
+    fx.setShakeEnabled(settings.shake)
+    let frameHadHardDrop = false
     const popups = new ClearPopupRenderer()
-    let shakeUntil = 0
     let lastHudUpdate = 0
 
     const runner = new GameRunner({
@@ -73,18 +74,10 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
         for (const ev of events) {
           if (ev.type === 'clear') {
             if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
-            if (settings.particles) {
-              for (const row of ev.rows) {
-                const visibleY = (row - 4) * CELL
-                if (visibleY < 0) continue
-                for (let x = 0; x < 10; x += 2) {
-                  particles.burst(x * CELL + CELL / 2, visibleY, '#aaaaaa', 5, 90)
-                }
-              }
-              if (settings.shake && (ev.info.count >= 4 || ev.info.spin === 'full' || ev.info.perfectClear)) {
-                shakeUntil = now + 160
-              }
-            }
+            fx.lineClear(ev.rows, CELL, ev.info, runner.game.combo)
+          }
+          if (ev.type === 'lock' && frameHadHardDrop) {
+            fx.hardDropImpact(ev.piece, CELL)
           }
         }
       },
@@ -92,8 +85,11 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
         let newRecord = false
         let prevBest: number | null = null
         if (mode === 'sprint') {
-          prevBest = useStats.getState().sprintBestMs
-          newRecord = stats.recordSprint(run.timeMs)
+          // topped-out runs are invalid: only a completed 40L counts as a record
+          if (run.lines >= 40) {
+            prevBest = useStats.getState().sprintBestMs
+            newRecord = stats.recordSprint(run.timeMs)
+          }
         } else if (mode === 'blitz' && blitzDuration) {
           prevBest = useStats.getState().blitzBestScore[blitzDuration]
           newRecord = stats.recordBlitz(blitzDuration, run.score)
@@ -119,6 +115,7 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
       last = t
 
       const actions = input.drainActions()
+      frameHadHardDrop = actions.includes('hardDrop')
       if (actions.includes('retry')) {
         input.detach()
         setRetryKey((k) => k + 1)
@@ -137,21 +134,15 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
         showGhost: settings.ghost,
       })
 
-      if (settings.particles) {
-        particles.update(dt / 1000)
-        particles.draw(ctx)
-      }
+      fx.update(dt / 1000)
+      fx.draw(ctx)
+      fx.drawOverlay(ctx, canvas.width, canvas.height, t)
 
       if (settings.clearPopups) {
         popups.draw(ctx, canvas.width, canvas.height, t)
       }
 
-      if (t < shakeUntil) {
-        const m = (shakeUntil - t) / 160 * 5
-        canvas.style.transform = `translate(${(Math.random() - 0.5) * m}px, ${(Math.random() - 0.5) * m}px)`
-      } else if (canvas.style.transform) {
-        canvas.style.transform = ''
-      }
+      fx.applyShake(canvas, t)
 
       holdCtx.clearRect(0, 0, holdCtx.canvas.width, holdCtx.canvas.height)
       drawMiniPiece(holdCtx, g.hold, holdCtx.canvas.width / 2, 24, 12)
@@ -237,7 +228,7 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
                 <HudRow label="LINES" value={String(result.run.lines)} />
                 <HudRow label="PPS" value={formatNum(result.run.pps)} />
                 <HudRow label="APM" value={formatNum(result.run.apm)} />
-                {mode === 'sprint' && (
+                {mode === 'sprint' && result.run.lines >= 40 && (
                   <HudRow
                     label="BEST TIME"
                     value={formatTime(

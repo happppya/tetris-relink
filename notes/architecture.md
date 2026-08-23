@@ -19,7 +19,7 @@ src/
     input.ts         # keyboard -> engine actions (DAS dir stack)
   render/
     canvas.ts        # playfield + mini-piece renderer (canvas 2D)
-    particles.ts     # particle system (cosmetic only)
+    effects.ts       # tiered visual effects system (cosmetic only; levels 1-5)
    ai/
      protocol.ts      # bot message types (worker <-> main)
      profiles.ts      # bot personalities / training weight profiles
@@ -42,7 +42,7 @@ src/
 2. The game loop is a single `requestAnimationFrame` driving a fixed-timestep accumulator; it calls `game.tick()` and hands the result to the renderer.
 3. React never re-renders per frame. HUD values are pushed via subscriptions at a throttled rate or refs.
 4. Settings changes take effect immediately in the running engine where possible (DAS/ARR/SDF/keybinds).
-5. Particles/effects live behind the global effects toggle; disabling them must not change gameplay behavior.
+5. Particles/effects live behind the global effects-level setting (`EFFECT_LEVELS` 1-5 in `render/effects.ts`); level 1 disables them entirely and must not change gameplay behavior.
 
 ## Determinism
 

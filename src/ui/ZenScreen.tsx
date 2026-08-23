@@ -5,7 +5,7 @@ import { Game, type GameEvent, type GameSnapshot } from '../engine/game'
 import { useSettings, msToFrames } from '../state/settings'
 import { useZen, zenLevelInfo, type GarbageMode, type GarbageMultiplier } from '../state/zen'
 import { renderBoard, drawMiniPiece, PIECE_COLORS } from '../render/canvas'
-import { ParticleSystem } from '../render/particles'
+import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, clearLabels } from '../render/cleartext'
 import { cellsFor } from '../engine/pieces'
 import { HIDDEN_H, type Cell, type InputAction } from '../engine/types'
@@ -14,6 +14,7 @@ import { applyPlacementToBoard, boardsEqual, placementCells } from '../ai/board'
 import type { BotHintPlacement } from '../ai/protocol'
 import { formatTime, formatNum } from './format'
 import { GarbageMeter } from './GarbageMeter'
+import { StreakBox } from './StreakBox'
 import { BOT_PROFILES } from '../ai/profiles'
 
 const CELL = 30
@@ -67,7 +68,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
   const [over, setOver] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [assistActive, setAssistActive] = useState(false)
-  const [hud, setHud] = useState({ score: 0, lines: 0, timeMs: 0, pps: 0, apm: 0, incoming: 0 })
+  const [hud, setHud] = useState({ score: 0, lines: 0, timeMs: 0, pps: 0, apm: 0, incoming: 0, streak: 0 })
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const holdRef = useRef<HTMLCanvasElement>(null)
@@ -95,7 +96,9 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
     let done = false
     let lastHudUpdate = 0
     let contributed = 0
-    const particles = new ParticleSystem()
+    const fx = new EffectsSystem(settings.effectsLevel)
+    fx.setShakeEnabled(settings.shake)
+    let frameHadHardDrop = false
     const popups = new ClearPopupRenderer()
     const hintProvider = new HintProvider()
     let hintPlacements: BotHintPlacement[] = []
@@ -130,9 +133,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
         for (const ev of events) {
           if (ev.type === 'clear') {
             if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
-            if (settings.particles && settings.shake && (ev.info.count >= 4 || ev.info.spin === 'full' || ev.info.perfectClear)) {
-              shakeUntil = now + 160
-            }
+            fx.lineClear(ev.rows, CELL, ev.info, runner.game.combo)
             if (zenRef.current.garbage === 'backfire') {
               runner.game.receiveGarbage(Math.round(ev.attack.totalLines * zenRef.current.multiplier), true)
             } else if (zenRef.current.garbage === 'unclear') {
@@ -140,6 +141,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
             }
           }
           if (ev.type === 'lock' && !done) {
+            if (frameHadHardDrop) fx.hardDropImpact(ev.piece, CELL)
             undoStack.current.push(runner.game.snapshot())
             redoStack.current.length = 0
             // keep the promised chain when the player followed the advice;
@@ -195,7 +197,6 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
       },
       onEnd: () => {},
     })
-    let shakeUntil = 0
     gameRef.current = runner.game
 
     const clearHints = () => {
@@ -283,6 +284,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
       last = t
 
       const actions = input.drainActions()
+      frameHadHardDrop = actions.includes('hardDrop')
       if (actions.includes('retry')) {
         input.detach()
         window.removeEventListener('keydown', onKeyDown)
@@ -309,10 +311,9 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
         showGhost: settings.ghost,
       })
 
-      if (settings.particles) {
-        particles.update(dt / 1000)
-        particles.draw(ctx)
-      }
+      fx.update(dt / 1000)
+      fx.draw(ctx)
+      fx.drawOverlay(ctx, canvas.width, canvas.height, t)
       if (settings.clearPopups) popups.draw(ctx, canvas.width, canvas.height, t)
 
       if (assistActiveRef.current && zenRef.current.assist && !pausedLocal && !done) {
@@ -373,12 +374,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
           ctx.restore()
         }
       }
-      if (t < shakeUntil) {
-        const m = ((shakeUntil - t) / 160) * 5
-        canvas.style.transform = `translate(${(Math.random() - 0.5) * m}px, ${(Math.random() - 0.5) * m}px)`
-      } else if (canvas.style.transform) {
-        canvas.style.transform = ''
-      }
+      fx.applyShake(canvas, t)
 
       holdCtx.clearRect(0, 0, holdCtx.canvas.width, holdCtx.canvas.height)
       drawMiniPiece(holdCtx, g.hold, holdCtx.canvas.width / 2, 24, 12)
@@ -396,6 +392,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
           pps: g.pps,
           apm: g.apm,
           incoming: g.pendingGarbage,
+          streak: g.streak,
         })
       }
 
@@ -442,6 +439,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
           <HudRow label="PPS" value={formatNum(hud.pps)} />
           <HudRow label="APM" value={formatNum(hud.apm)} />
         </div>
+        <StreakBox value={hud.streak} />
         <button
           onClick={() => setSidebarOpen(true)}
           className="border border-neutral-700 px-3 py-1 font-mono text-xs text-neutral-400 hover:border-neutral-400 hover:text-neutral-200"

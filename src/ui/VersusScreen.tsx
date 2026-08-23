@@ -6,7 +6,7 @@ import { Game } from '../engine/game'
 import { useSettings, msToFrames } from '../state/settings'
 import { useStats } from '../state/stats'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
-import { ParticleSystem } from '../render/particles'
+import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, clearLabels } from '../render/cleartext'
 import type { GameEvent } from '../engine/game'
 import type { InputAction } from '../engine/types'
@@ -107,7 +107,9 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
     let aiAcc = 0
     let basePps = settings.ai.pps
     let livePps = settings.ai.pps
-    const particles = new ParticleSystem()
+    const fx = new EffectsSystem(settings.effectsLevel)
+    fx.setShakeEnabled(settings.shake)
+    let frameHadHardDrop = false
     const popups = new ClearPopupRenderer()
 
     const playerRunner = new GameRunner({
@@ -129,13 +131,10 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
           }
           if (ev.type === 'clear') {
             if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
-            if (settings.particles) {
-              for (const row of ev.rows) {
-                const visibleY = (row - 4) * CELL
-                if (visibleY < 0) continue
-                particles.burst(150, visibleY, '#aaaaaa', 10, 90)
-              }
-            }
+            fx.lineClear(ev.rows, CELL, ev.info, player.combo)
+          }
+          if (ev.type === 'lock' && frameHadHardDrop) {
+            fx.hardDropImpact(ev.piece, CELL)
           }
         }
       },
@@ -180,6 +179,7 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
       last = t
 
       const actions = input.drainActions()
+      frameHadHardDrop = actions.includes('hardDrop')
       if (actions.includes('retry')) {
         input.detach()
         setRetryKey((k) => k + 1)
@@ -236,14 +236,15 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
       renderBoard(pCtx, g.board, g.active, g.ghostPiece, { cellSize: CELL, showGhost: settings.ghost })
       renderBoard(aCtx, aiGame.board, aiGame.active, null, { cellSize: aiCell, showGhost: false })
 
-      if (settings.particles) {
-        particles.update(dt / 1000)
-        particles.draw(pCtx)
-      }
+      fx.update(dt / 1000)
+      fx.draw(pCtx)
+      fx.drawOverlay(pCtx, pCtx.canvas.width, pCtx.canvas.height, t)
 
       if (settings.clearPopups) {
         popups.draw(pCtx, pCtx.canvas.width, pCtx.canvas.height, t)
       }
+
+      fx.applyShake(playerCanvasRef.current!, t)
 
       pHoldCtx.clearRect(0, 0, pHoldCtx.canvas.width, pHoldCtx.canvas.height)
       drawMiniPiece(pHoldCtx, g.hold, pHoldCtx.canvas.width / 2, 24, 12)

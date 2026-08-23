@@ -16,7 +16,8 @@ export interface Settings {
   sddMs: number
   keybinds: Record<InputAction, string>
   ghost: boolean
-  particles: boolean
+  /** visual effects intensity, see EFFECT_LEVELS in render/effects.ts */
+  effectsLevel: number
   shake: boolean
   clearPopups: boolean
   startLevel: number
@@ -65,7 +66,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sddMs: 33,
   keybinds: { ...DEFAULT_KEYBINDS },
   ghost: true,
-  particles: true,
+  effectsLevel: 2,
   shake: false,
   clearPopups: true,
   startLevel: 1,
@@ -90,7 +91,7 @@ const SETTINGS_KEYS = [
   'sddMs',
   'keybinds',
   'ghost',
-  'particles',
+  'effectsLevel',
   'shake',
   'clearPopups',
   'startLevel',
@@ -129,7 +130,9 @@ export function parseSettings(raw: unknown): Settings | null {
   out.sddMs = clampNum(r.sddMs, 0, 1000, out.sddMs)
   out.startLevel = clampNum(r.startLevel, 1, 19, out.startLevel)
   if (typeof r.ghost === 'boolean') out.ghost = r.ghost
-  if (typeof r.particles === 'boolean') out.particles = r.particles
+  out.effectsLevel = clampNum(r.effectsLevel, 1, 5, out.effectsLevel)
+  // legacy pre-levels setting
+  if (r.effectsLevel === undefined && r.particles === false) out.effectsLevel = 1
   if (typeof r.shake === 'boolean') out.shake = r.shake
   if (typeof r.clearPopups === 'boolean') out.clearPopups = r.clearPopups
   if (typeof r.keybinds === 'object' && r.keybinds !== null) {
@@ -195,7 +198,7 @@ export const useSettings = create<SettingsStore>()(
       resetGameplay: () => set({ ghost: DEFAULT_SETTINGS.ghost, startLevel: DEFAULT_SETTINGS.startLevel }),
       resetVisuals: () =>
         set({
-          particles: DEFAULT_SETTINGS.particles,
+          effectsLevel: DEFAULT_SETTINGS.effectsLevel,
           shake: DEFAULT_SETTINGS.shake,
           clearPopups: DEFAULT_SETTINGS.clearPopups,
         }),
@@ -216,10 +219,10 @@ export const useSettings = create<SettingsStore>()(
     }),
     {
       name: 'tetris-liberation-settings',
-      version: 2,
+      version: 3,
       migrate: (state) => {
         const s = (state ?? {}) as Partial<Settings>
-        return {
+        const merged = {
           ...cloneDefaults(),
           ...s,
           attack: { ...DEFAULT_ATTACK },
@@ -227,6 +230,10 @@ export const useSettings = create<SettingsStore>()(
           keybinds: { ...cloneDefaults().keybinds, ...(s.keybinds ?? {}) },
           ai: { ...cloneDefaults().ai, ...(s.ai ?? {}) },
         }
+        if (typeof s.effectsLevel !== 'number') {
+          merged.effectsLevel = (s as Record<string, unknown>).particles === false ? 1 : DEFAULT_SETTINGS.effectsLevel
+        }
+        return merged
       },
     },
   ),

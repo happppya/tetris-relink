@@ -489,4 +489,68 @@ describe('Garbage & competitive mechanics', () => {
     expect(detectSpin(mkBoard([[3, TOTAL_H - 2], [5, TOTAL_H - 2]]), l, 1).spin).toBe('full')
     expect(detectSpin(mkBoard([]), l, 1).spin).toBe('none')
   })
+
+  it('detects S/Z/L/J immobile spins the corner rule misses (flat 2-line slots)', () => {
+    const mkBoard = (filled: [number, number][]) => {
+      const board: Cell[][] = Array.from({ length: TOTAL_H }, () => Array<Cell>(BOARD_W).fill(null))
+      for (const [x, y] of filled) board[y][x] = 'J'
+      return board
+    }
+    // S rot 0 at x=3: cells (4,y),(5,y),(3,y+1),(4,y+1); blocked left/right/up only
+    const s = { type: 'S' as const, rot: 0 as const, x: 3, y: TOTAL_H - 2 }
+    expect(
+      detectSpin(
+        mkBoard([
+          [2, TOTAL_H - 1],
+          [6, TOTAL_H - 2],
+          [4, TOTAL_H - 3],
+        ]),
+        s,
+        0,
+      ).spin,
+    ).toBe('full')
+    // same setup but room to move right: no spin
+    expect(detectSpin(mkBoard([[2, TOTAL_H - 1]]), s, 0).spin).toBe('none')
+    // J rot 0 at x=3: cells (3,y),(3,y+1),(4,y+1),(5,y+1); up-shift hits (3..5,y)
+    const j = { type: 'J' as const, rot: 0 as const, x: 3, y: TOTAL_H - 2 }
+    expect(
+      detectSpin(
+        mkBoard([
+          [2, TOTAL_H - 1],
+          [6, TOTAL_H - 1],
+          [4, TOTAL_H - 2],
+        ]),
+        j,
+        0,
+      ).spin,
+    ).toBe('full')
+    expect(detectSpin(mkBoard([[2, TOTAL_H - 1]]), j, 0).spin).toBe('none')
+    // L rot 0 at x=3: cells (5,y),(3,y+1),(4,y+1),(5,y+1); up-shift hits (3..5,y)
+    const l = { type: 'L' as const, rot: 0 as const, x: 3, y: TOTAL_H - 2 }
+    expect(
+      detectSpin(
+        mkBoard([
+          [2, TOTAL_H - 1],
+          [6, TOTAL_H - 1],
+          [4, TOTAL_H - 2],
+        ]),
+        l,
+        0,
+      ).spin,
+    ).toBe('full')
+    expect(detectSpin(mkBoard([[2, TOTAL_H - 1]]), l, 0).spin).toBe('none')
+    // Z rot 0 at x=3: cells (3,y),(4,y),(4,y+1),(5,y+1)
+    const z = { type: 'Z' as const, rot: 0 as const, x: 3, y: TOTAL_H - 2 }
+    expect(
+      detectSpin(
+        mkBoard([
+          [2, TOTAL_H - 2],
+          [6, TOTAL_H - 1],
+          [3, TOTAL_H - 3],
+        ]),
+        z,
+        0,
+      ).spin,
+    ).toBe('full')
+  })
 })

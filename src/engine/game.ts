@@ -105,8 +105,9 @@ export function detectSpin(board: Cell[][], piece: ActivePiece, lastRotateKick: 
     const y = cy + dy
     if (x < 0 || x >= BOARD_W || y >= TOTAL_H || (y >= 0 && board[y][x] !== null)) occupied++
   }
-  if (occupied < 3 || lastRotateKick < 0) return { spin: 'none', kickIndex: lastRotateKick }
+  if (lastRotateKick < 0) return { spin: 'none', kickIndex: lastRotateKick }
   if (piece.type === 'T') {
+    if (occupied < 3) return { spin: 'none', kickIndex: lastRotateKick }
     if (lastRotateKick === 4) return { spin: 'full', kickIndex: lastRotateKick }
     const front: [number, number][] =
       piece.rot === 0
@@ -135,7 +136,16 @@ export function detectSpin(board: Cell[][], piece: ActivePiece, lastRotateKick: 
     })
     return { spin: filledFront ? 'full' : 'mini', kickIndex: lastRotateKick }
   }
-  return { spin: 'full', kickIndex: lastRotateKick }
+  // S/Z/L/J: guideline-style immobile rule alongside the corner check — if the
+  // final rotation wedged the piece so it can no longer move left, right or up,
+  // it counts as a spin even when the 3-corner heuristic misses (e.g. an S
+  // slotted flat into a 2-line notch)
+  const cornerSpin = occupied >= 3
+  const immobile =
+    pieceCollides(board, { ...piece, x: piece.x - 1 }) &&
+    pieceCollides(board, { ...piece, x: piece.x + 1 }) &&
+    pieceCollides(board, { ...piece, y: piece.y - 1 })
+  return { spin: cornerSpin || immobile ? 'full' : 'none', kickIndex: lastRotateKick }
 }
 
 export class Game {

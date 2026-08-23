@@ -47,10 +47,10 @@ Status legend: [ ] todo · [~] in progress · [x] done
 
 ## 4. Visual effects (toggleable)
 
-- [x] Global toggles in settings (particles / shake)
+- [x] Global effects-level setting (levels 1-5: minimal / classic / vivid / dynamic / overdrive) switchable in the settings menu
 - [x] Clear text popups on line clears (SINGLE/DOUBLE/TRIPLE/TETRIS, T/S/Z-spins incl. mini, PERFECT CLEAR) with a settings toggle
 - [x] Particle effects on line clears
-- [ ] Particle effects on hard drop impact
+- [x] Particle effects on hard drop impact (effects level 4+)
 - [x] Optional screen shake on tetris/t-spin/perfect clear
 - [ ] Subtle lock flash — optional/nice to have
 
