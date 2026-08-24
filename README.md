@@ -1,6 +1,6 @@
 # Tetris Liberation
 
-[Play here.](https://happppya.github.com/tetris-liberation)
+[Play here.](https://happppya.github.io/tetris-liberation)
 
 This project aims to liberate the TETR.IO experience for all. Star the repository if you enjoyed.
 
