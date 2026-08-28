@@ -8,9 +8,10 @@ interface Props {
   onZen: () => void
   onSettings: () => void
   onStats: () => void
+  onMultiplayer: () => void
 }
 
-export function MainMenu({ onMode, onZen, onSettings, onStats }: Props) {
+export function MainMenu({ onMode, onZen, onSettings, onStats, onMultiplayer }: Props) {
   const xp = useZen((s) => s.xp)
   const level = zenLevelInfo(xp).level
   const sprintBest = useStats((s) => s.sprintBestMs)
@@ -33,6 +34,7 @@ export function MainMenu({ onMode, onZen, onSettings, onStats }: Props) {
           { label: 'BLITZ 3:00', hint: blitzHint(180), onSelect: () => onMode('blitz', 180) },
           { label: 'BLITZ 5:00', hint: blitzHint(300), onSelect: () => onMode('blitz', 300) },
           { label: 'VERSUS AI', hint: 'battle', onSelect: () => onMode('versus') },
+          { label: 'MULTIPLAYER', hint: 'lobbies', onSelect: onMultiplayer },
           { label: `ZEN [LV ${level}]`, hint: 'endless', onSelect: onZen },
           { label: 'SETTINGS', onSelect: onSettings },
           { label: 'STATS', onSelect: onStats },

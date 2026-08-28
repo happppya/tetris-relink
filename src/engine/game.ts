@@ -1,4 +1,4 @@
-import { Bag, mulberry32 } from './bag'
+import { Bag, mulberry32 } from './bag.ts'
 import {
   computeAttack,
   DEFAULT_ATTACK,
@@ -7,10 +7,10 @@ import {
   type ClearInfo,
   type SpinKind,
 } from './attack'
-import { cellsFor, spawnPiece } from './pieces'
-import { DEFAULT_SCORING, clearScore, comboScore, gravitySecondsPerRow, type ScoringConfig } from './scoring'
-import { ghostY, pieceCollides, tryMove, tryRotate } from './srs'
-import { BOARD_W, TOTAL_H, type ActivePiece, type Cell, type InputAction, type PieceType } from './types'
+import { cellsFor, spawnPiece } from './pieces.ts'
+import { DEFAULT_SCORING, clearScore, comboScore, gravitySecondsPerRow, type ScoringConfig } from './scoring.ts'
+import { ghostY, pieceCollides, tryMove, tryRotate } from './srs.ts'
+import { BOARD_W, TOTAL_H, type ActivePiece, type Cell, type InputAction, type PieceType } from './types.ts'
 
 export const LOCK_DELAY_FRAMES = 30
 export const MAX_RESETS = 15
@@ -224,9 +224,9 @@ export class Game {
     return this.frames > 0 ? (this.sentLines * 3600) / this.frames : 0
   }
 
-  receiveGarbage(rows: number, bypassCancel = false) {
+  receiveGarbage(rows: number, bypassCancel = false, hole = (Math.random() * BOARD_W) | 0) {
     if (rows <= 0 || this.over) return
-    this.garbageQueue.push({ rows, hole: (Math.random() * BOARD_W) | 0, bypass: bypassCancel })
+    this.garbageQueue.push({ rows, hole: Math.max(0, Math.min(BOARD_W - 1, Math.round(hole))), bypass: bypassCancel })
   }
 
   get pendingGarbage(): number {

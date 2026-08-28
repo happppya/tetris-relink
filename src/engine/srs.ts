@@ -1,6 +1,6 @@
-import { cellsFor } from './pieces'
-import type { ActivePiece, Cell, Pos } from './types'
-import { BOARD_W, TOTAL_H } from './types'
+import { cellsFor } from './pieces.ts'
+import type { ActivePiece, Cell, Pos } from './types.ts'
+import { BOARD_W, TOTAL_H } from './types.ts'
 
 type Kick = readonly Pos[]
 const k = (pairs: [number, number][]): Kick => pairs.map(([x, y]) => ({ x, y: y === 0 ? 0 : -y }))

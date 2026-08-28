@@ -1,4 +1,4 @@
-import { PIECE_TYPES, type PieceType } from './types'
+import { PIECE_TYPES, type PieceType } from './types.ts'
 
 export type Rng = () => number
 

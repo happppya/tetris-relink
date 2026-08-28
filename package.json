@@ -6,6 +6,8 @@
   "scripts": {
     "build:cc2": "wasm-pack build --target web --release --out-dir wasm-pkg --out-name cc2_wasm vendor/cc2-wasm && node scripts/copy-cc2.mjs && node scripts/patch-cc2.mjs",
     "dev": "vite",
+    "server": "node server/index.ts",
+    "server:dev": "node --watch server/index.ts",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",
@@ -16,12 +18,14 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwindcss": "^4.3.3",
+    "ws": "^8.21.3",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.4",
     "oxlint": "^1.75.0",
     "typescript": "~6.0.2",
@@ -29,4 +33,3 @@
     "vitest": "^4.1.11"
   }
 }
-

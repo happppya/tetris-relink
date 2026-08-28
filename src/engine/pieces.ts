@@ -1,4 +1,4 @@
-import type { ActivePiece, PieceType, Pos } from './types'
+import type { ActivePiece, PieceType, Pos } from './types.ts'
 
 const BASE: Record<PieceType, string[]> = {
   I: ['....', 'XXXX', '....', '....'],

@@ -1,4 +1,4 @@
-import type { PieceType } from './types'
+import type { PieceType } from './types.ts'
 
 export interface AttackConfig {
   single: number

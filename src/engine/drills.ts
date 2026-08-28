@@ -1,4 +1,4 @@
-import { BOARD_W, TOTAL_H, VISIBLE_H, type Cell, type PieceType } from './types'
+import { BOARD_W, TOTAL_H, VISIBLE_H, type Cell, type PieceType } from './types.ts'
 
 export type DrillCategory = 'tspin' | 'pc' | 'opener' | 'stacking'
 

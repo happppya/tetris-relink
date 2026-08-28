@@ -1,4 +1,4 @@
-import { BOARD_W, TOTAL_H, type Cell } from './types'
+import { BOARD_W, TOTAL_H, type Cell } from './types.ts'
 
 /** Filled-cell height of each column (0 = empty column). */
 export function columnHeights(board: Cell[][]): number[] {

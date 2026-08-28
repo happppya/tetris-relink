@@ -5,6 +5,18 @@ How the codebase is organized. See tech-stack.md for tooling decisions and game-
 ## Layers
 
 ```
+server/          # Node + ws multiplayer server (plain `node server/index.ts`)
+  index.ts       # WebSocket entry: lobby + match message handling
+  lobby.ts       # lobby membership, host transfer, settings
+  registry.ts    # join-code registry, public list
+  codes.ts       # join code generator
+  session.ts     # authoritative in-match state: attack computation, garbage, snapshot cross-check
+  lossyproxy.ts  # test helper: drops server messages to simulate packet loss
+shared/          # imported by both server and client (explicit .ts extensions)
+  protocol.ts    # single source of truth for client<->server messages
+  lobby-settings.ts # defaults, sanitization, descriptions
+  board.ts       # board serialization + deterministic garbage application
+
 src/
   engine/        # pure TS, zero DOM/React imports
     types.ts         # board dims, cell, piece, action types
@@ -13,6 +25,7 @@ src/
     srs.ts           # rotation + kick tables, collision, ghost
     scoring.ts       # guideline scores, gravity curve, blitz bonuses
     attack.ts        # attack table config, combo/streak math
+    match.ts         # series-of-games match state: wins, rounds, last-man-standing eliminations, first-to-X / win-by-X end conditions
     drills.ts        # practice drill catalog: preset boards, fixed queues, goals
     stackstats.ts    # stack quality metrics: holes, bumpiness, heights, stack top
     game.ts          # core simulation: tick(input) -> events

@@ -5,6 +5,10 @@ import { StatsScreen } from './ui/StatsScreen'
 import { GameScreen } from './ui/GameScreen'
 import { VersusScreen } from './ui/VersusScreen'
 import { ZenScreen } from './ui/ZenScreen'
+import { MultiplayerScreen } from './ui/MultiplayerScreen'
+import { LobbyScreen } from './ui/LobbyScreen'
+import { MultiplayerGameScreen } from './ui/MultiplayerGameScreen'
+import { useLobby } from './state/lobby'
 
 type Screen =
   | { name: 'menu' }
@@ -13,9 +17,12 @@ type Screen =
   | { name: 'game'; mode: 'sprint' | 'blitz'; blitzDuration?: 60 | 180 | 300 }
   | { name: 'versus' }
   | { name: 'zen' }
+  | { name: 'multiplayer' }
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>({ name: 'menu' })
+  const lobby = useLobby((s) => s.lobby)
+  const match = useLobby((s) => s.match)
 
   switch (screen.name) {
     case 'menu':
@@ -27,6 +34,18 @@ export default function App() {
           onZen={() => setScreen({ name: 'zen' })}
           onSettings={() => setScreen({ name: 'settings' })}
           onStats={() => setScreen({ name: 'stats' })}
+          onMultiplayer={() => setScreen({ name: 'multiplayer' })}
+        />
+      )
+    case 'multiplayer':
+      if (match) return <MultiplayerGameScreen onExit={() => setScreen({ name: 'multiplayer' })} />
+      if (lobby) return <LobbyScreen onExit={() => setScreen({ name: 'multiplayer' })} />
+      return (
+        <MultiplayerScreen
+          onBack={() => {
+            useLobby.getState().disconnect()
+            setScreen({ name: 'menu' })
+          }}
         />
       )
     case 'settings':
