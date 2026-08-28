@@ -3,6 +3,7 @@ import type { PieceType } from '../src/engine/types.ts'
 export type Visibility = 'public' | 'private'
 
 export type SpinKind = 'none' | 'mini' | 'full'
+export type TargetMode = 'manual' | 'revenge' | 'random'
 
 /** A piece placement reported to the server (computed attack is server-side). */
 export interface LockEvent {
@@ -56,7 +57,9 @@ export type ClientMessage =
   | { type: 'start_match' }
   | { type: 'list_lobbies' }
   | { type: 'lock'; lock: LockEvent }
-  | { type: 'snapshot'; board: Board; score: number; seq: number }
+  | { type: 'target'; mode: TargetMode; targetId?: string }
+  | { type: 'snapshot'; board: Board; score: number; seq: number; matchId: string }
+  | { type: 'topout'; matchId: string }
   | { type: 'ping'; t: number }
 
 export type ServerMessage =
@@ -66,7 +69,13 @@ export type ServerMessage =
   | { type: 'settings_update'; settings: LobbySettings }
   | { type: 'lobby_list'; lobbies: PublicLobbyInfo[] }
   | { type: 'match_start'; matchId: string; players: LobbyPlayer[]; settings: LobbySettings }
+  | { type: 'board_update'; playerId: string; board: Board; score: number; pendingGarbage: number }
+  | { type: 'game_end'; round: number; winnerId: string | null; eliminatedIds: string[]; wins: Record<string, number> }
+  | { type: 'game_start'; round: number; players: LobbyPlayer[]; board: Board }
+  | { type: 'match_end'; winnerId: string; wins: Record<string, number> }
+  | { type: 'player_left'; playerId: string }
   | { type: 'garbage'; lines: number; hole: number; from: string }
+  | { type: 'target_update'; playerId: string; mode: TargetMode; targetId: string | null }
   | { type: 'snapshot_ack'; seq: number }
   | { type: 'resync'; board: Board; pendingGarbage: number; score: number }
   | { type: 'error'; code: string; message: string }

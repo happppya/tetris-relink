@@ -30,7 +30,7 @@ describe('Session', () => {
   it('computes the attack from the room table and routes it to a target', () => {
     const s = makeSession()
     const events = s.move('a', tetris)
-    expect(events).toEqual([{ type: 'garbage', to: 'b', lines: 4, hole: 0, from: 'a' }])
+    expect(events).toContainEqual({ type: 'garbage', to: 'b', lines: 4, hole: 0, from: 'a' })
     // the sender's score accrues the attack
     expect(s.checkSnapshot('a', serializeBoard(emptyBoard()), 4)).toEqual({ status: 'ok' })
     // the target's board gained 4 deterministic garbage rows

@@ -12,6 +12,8 @@ import type { ServerMessage } from '../../shared/protocol.ts'
 import { deserializeBoard, serializeBoard } from '../../shared/board.ts'
 
 const CELL = 30
+const OPPONENT_CELL = 8
+const MAX_OPPONENTS = 7
 
 export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
   const settings = useSettings()
@@ -19,17 +21,25 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
   const clearMatch = useLobby((s) => s.clearMatch)
   const [hud, setHud] = useState({ score: 0, lines: 0, incoming: 0, latency: 0 })
   const [error, setError] = useState<string | null>(null)
+  const [targetMode, setTargetMode] = useState<'manual' | 'revenge' | 'random'>('random')
+  const [targetId, setTargetId] = useState<string | null>(null)
+  const [opponents, setOpponents] = useState<Record<string, { board: Cell[][]; score: number; incoming: number; left?: boolean; wins: number; alive: boolean }>>({})
+  const [round, setRound] = useState(1)
+  const [wins, setWins] = useState<Record<string, number>>({})
+  const [finished, setFinished] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const nextRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
     if (!match) return
+    const selectedTargetMode = targetMode
     const ctx = canvasRef.current!.getContext('2d')!
     const nextCtx = nextRef.current!.getContext('2d')!
     let snapshotSeq = 0
     let lastSnapshot = 0
     let lastLockPieces = 0
     let stopped = false
+    let endTimer: ReturnType<typeof setTimeout> | null = null
     let raf = 0
     let last = performance.now()
     let paused = false
@@ -59,6 +69,27 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
     })
 
     const unsubscribe = net.onMessage((msg: ServerMessage) => {
+      if (msg.type === 'game_end') {
+        setRound(msg.round)
+        setWins(msg.wins)
+        setError(msg.winnerId ? `GAME WON BY ${msg.winnerId}` : 'GAME OVER')
+        setOpponents((current) => Object.fromEntries(Object.entries(current).map(([id, value]) => [id, { ...value, alive: !msg.eliminatedIds.includes(id), wins: msg.wins[id] ?? value.wins }])))
+      }
+      if (msg.type === 'game_start') {
+        const board = deserializeBoard(msg.board) as Cell[][]
+        if (board.length === 20 && board.every((row) => row.length === 10)) {
+          const snap = runner.game.snapshot()
+          runner.game.restore({ ...snap, board: [...snap.board.slice(0, 4), ...board], score: 0, lines: 0, piecesPlaced: 0, frames: 0, over: false, garbageQueue: [] })
+        }
+        setRound(msg.round); setError(null); setOpponents({})
+      }
+      if (msg.type === 'match_end') { setError(`MATCH WON BY ${msg.winnerId}`); setFinished(true); runner.abort(); endTimer = setTimeout(() => { clearMatch(); onExit() }, 3000) }
+      if (msg.type === 'player_left') setOpponents((current) => ({ ...current, [msg.playerId]: { ...(current[msg.playerId] ?? { board: [], score: 0, incoming: 0, wins: 0, alive: false }), left: true, alive: false } }))
+      if (msg.type === 'target_update' && msg.playerId === useLobby.getState().selfId) { setTargetMode(msg.mode); setTargetId(msg.targetId) }
+      if (msg.type === 'board_update' && msg.playerId !== useLobby.getState().selfId) {
+        const board = deserializeBoard(msg.board) as Cell[][]
+        if (board.length === 20 && board.every((row) => row.length === 10)) setOpponents((current) => ({ ...current, [msg.playerId]: { board, score: msg.score, incoming: msg.pendingGarbage, wins: current[msg.playerId]?.wins ?? 0, alive: current[msg.playerId]?.alive ?? true } }))
+      }
       if (msg.type === 'garbage') {
         runner.game.receiveGarbage(msg.lines, false, msg.hole)
         setHud((h) => ({ ...h, incoming: runner.game.pendingGarbage }))
@@ -89,13 +120,15 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
       last = t
       const actions = input.drainActions()
       if (actions.includes('pause')) paused = !paused
+      if (actions.includes('assist')) net.send({ type: 'target', mode: selectedTargetMode })
+      if (actions.includes('retry')) return
       if (!paused) {
         runner.advance(dt, { dir: input.dir, softDrop: input.softDrop, actions })
         const g = runner.game
         if (g.frames - lastSnapshot >= 30) {
           lastSnapshot = g.frames
           snapshotSeq++
-          net.send({ type: 'snapshot', board: serializeBoard(g.board.slice(-20)), score: g.score, seq: snapshotSeq })
+          net.send({ type: 'snapshot', board: serializeBoard(g.board.slice(-20)), score: g.score, seq: snapshotSeq, matchId: match.matchId })
         }
         // Locks are sent from the event stream via the same tick cadence.
         // runner events are captured below by comparing the lock event count.
@@ -116,16 +149,21 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
       input.detach()
       unsubscribe()
       runner.abort()
+      if (endTimer) clearTimeout(endTimer)
     }
-  }, [match, settings, clearMatch])
+  }, [match, settings, targetMode, clearMatch, onExit])
 
   if (!match) return null
   return (
     <main className="flex min-h-screen items-center justify-center gap-6 font-mono">
       <aside className="w-40">
         <h2 className="mb-2 text-xs tracking-widest text-neutral-500">MATCH</h2>
-        <p className="mb-4 text-xs text-neutral-400">{match.settings.mode === 'firstToX' ? `FIRST TO ${match.settings.goal}` : `WIN BY ${match.settings.winBy}`}</p>
-        <p className="text-xs text-neutral-500">{hud.latency}ms</p>
+        <p className="mb-4 text-xs text-neutral-400">ROUND {round} · {match.settings.mode === 'firstToX' ? `FIRST TO ${match.settings.goal}` : `WIN BY ${match.settings.winBy}`}</p>
+        <p className="text-xs text-neutral-500">{Object.entries(wins).map(([id, value]) => `${match.players.find((player) => player.id === id)?.name ?? id}: ${value}`).join(' · ')}</p>
+        <p className="text-xs text-neutral-500">{hud.latency}ms · {targetMode.toUpperCase()}</p>
+        <div className="mt-3 flex gap-1">
+          {(['manual', 'revenge', 'random'] as const).map((mode) => <button key={mode} onClick={() => { setTargetMode(mode); setTargetId(null); net.send({ type: 'target', mode }) }} className={`border px-1 text-[10px] ${targetMode === mode ? 'border-neutral-300 text-neutral-100' : 'border-neutral-800 text-neutral-500'}`}>{mode.slice(0, 3).toUpperCase()}</button>)}
+        </div>
         <p className="text-sm text-neutral-200">SCORE {hud.score}</p>
         <p className="text-sm text-neutral-200">LINES {hud.lines}</p>
         <GarbageMeter amount={hud.incoming} />
@@ -134,11 +172,16 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
         <canvas ref={canvasRef} width={300} height={600} className="border border-neutral-700" />
         <div><h2 className="mb-1 text-xs tracking-widest text-neutral-500">NEXT</h2><canvas ref={nextRef} width={120} height={230} className="border border-neutral-800" /></div>
       </div>
-      <aside className="w-48">
+      <aside className="w-64">
         <h2 className="mb-2 text-xs tracking-widest text-neutral-500">OPPONENTS</h2>
-        {match.players.filter((p) => p.id !== useLobby.getState().selfId).map((p) => <p key={p.id} className="text-sm text-neutral-300">{p.name}</p>)}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {match.players.filter((p) => p.id !== useLobby.getState().selfId).slice(0, MAX_OPPONENTS).map((p) => {
+          const opponent = opponents[p.id]
+          return <button key={p.id} disabled={opponent?.left || opponent?.alive === false} onClick={() => { setTargetMode('manual'); setTargetId(p.id); net.send({ type: 'target', mode: 'manual', targetId: p.id }) }} className={`flex min-w-0 items-start gap-2 text-left disabled:opacity-40 ${targetId === p.id ? 'border border-neutral-300' : ''}`}><div className="min-w-0 flex-1"><p className="truncate text-sm text-neutral-300">{p.name}{opponent?.left ? ' · LEFT' : opponent?.alive === false ? ' · OUT' : ''}</p><p className="text-xs text-neutral-600">{opponent?.wins ?? 0}W · SCORE {opponent?.score ?? 0} · IN {opponent?.incoming ?? 0}</p></div>{opponent?.board.length === 20 && <canvas ref={(canvas) => { if (canvas) renderBoard(canvas.getContext('2d')!, opponent.board, null, null, { cellSize: OPPONENT_CELL, showGhost: false }) }} width={80} height={160} className="border border-neutral-800" />}</button>
+        })}
+        </div>
         {error && <p className="mt-4 text-xs text-red-400">{error}</p>}
-        <button onClick={() => { clearMatch(); onExit() }} className="mt-6 border border-neutral-700 px-3 py-2 text-xs text-neutral-400">LEAVE</button>
+        <button disabled={finished} onClick={() => { clearMatch(); onExit() }} className="mt-6 border border-neutral-700 px-3 py-2 text-xs text-neutral-400 disabled:opacity-40">LEAVE</button>
       </aside>
     </main>
   )

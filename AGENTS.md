@@ -30,4 +30,5 @@ Fully frontend, singleplayer **modern Tetris** application (React + TypeScript +
 - Update `notes/todo.md` status markers (`[ ]`, `[~]`, `[x]`) as work progresses.
 - Unit-test engine changes (bag distribution, kick tables, timing) with Vitest once scaffolding exists.
 - Server logic lives in `server/` as pure TS (no framework); keep the socket layer thin and unit-test the logic. Run the server with `npm run server` (plain `node server/index.ts` — Node 22.18+ type stripping; imports of TS files must use explicit `.ts` extensions).
-- Run lint/typecheck before declaring a task complete.
+- Fast multiplayer verification uses real ephemeral WebSockets, not the browser preview: `npm run test:multiplayer` runs the two-client and message-loss contracts; `server/test-client.ts` is the shared simulator and must be reused by socket tests.
+- Run lint/typecheck before declaring a task complete. Vitest's CLI does not support Jest's `--runInBand`; use `npm test` or a file-filtered `npm test -- --run ...`.

@@ -4,7 +4,8 @@ import { pathToFileURL } from 'node:url'
 import { WebSocketServer, WebSocket } from 'ws'
 import { LobbyRegistry } from './registry.ts'
 import { Lobby, MAX_PLAYERS, type Member } from './lobby.ts'
-import { Session } from './session.ts'
+import { MatchSession } from './match-session.ts'
+import type { MatchEvent } from '../src/engine/match.ts'
 import { sanitizeLobbySettings, sanitizeName } from '../shared/lobby-settings.ts'
 import type { ClientMessage, LobbyState, ServerMessage, Visibility } from '../shared/protocol.ts'
 
@@ -20,8 +21,8 @@ interface Conn {
 }
 
 interface SessionHandle {
-  session: Session
-  playerIds: string[]
+  match: MatchSession
+  lobbyCode: string
 }
 
 let nextMatchId = 1
@@ -73,6 +74,26 @@ export function startServer(port: number): ServerHandle {
     if (newHostId) {
       const hostConn = conns.get(newHostId)
       if (hostConn) send(hostConn.ws, { type: 'error', code: 'host_transferred', message: 'you are now the host' })
+    }
+  }
+
+  const sessionFor = (conn: Conn, matchId?: string): SessionHandle | undefined => {
+    if (matchId) {
+      const match = sessions.get(matchId)
+      return match?.lobbyCode === conn.lobbyCode && match.match.has(conn.id) ? match : undefined
+    }
+    return [...sessions.values()].find((entry) => entry.lobbyCode === conn.lobbyCode && entry.match.has(conn.id))
+  }
+
+  const emitMatchEvents = (entry: SessionHandle, events: MatchEvent[]) => {
+    const lobby = registry.get(entry.lobbyCode)
+    if (!lobby) return
+    for (const event of events) {
+      if (event.type === 'eliminated' && event.alive > 0) sendToLobby(lobby, { type: 'game_end', round: entry.match.match.round, winnerId: null, eliminatedIds: [event.playerId], wins: entry.match.match.wins() })
+      if (event.type === 'game_won') sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: event.winnerId, eliminatedIds: [], wins: event.wins })
+      if (event.type === 'game_draw') sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: null, eliminatedIds: [], wins: entry.match.match.wins() })
+      if (event.type === 'match_won') sendToLobby(lobby, { type: 'match_end', winnerId: event.winnerId, wins: event.wins })
+      if (event.type === 'game_won' && entry.match.match.status === 'active') sendToLobby(lobby, { type: 'game_start', round: entry.match.match.round, players: lobby.memberList, board: entry.match.freshBoard() })
     }
   }
 
@@ -168,8 +189,8 @@ export function startServer(port: number): ServerHandle {
         }
         const members = lobby.memberList.map((p) => ({ id: p.id, name: p.name }))
         const matchId = `m${nextMatchId++}`
-        const session = new Session(matchId, members, lobby.settings)
-        sessions.set(matchId, { session, playerIds: members.map((m) => m.id) })
+        const match = new MatchSession(matchId, members, lobby.settings)
+        sessions.set(matchId, { match, lobbyCode: lobby.code })
         sendToLobby(lobby, {
           type: 'match_start',
           matchId,
@@ -178,24 +199,42 @@ export function startServer(port: number): ServerHandle {
         })
         return
       }
+      case 'topout': {
+        const sess = sessionFor(conn, msg.matchId)
+        if (!sess) return
+        emitMatchEvents(sess, sess.match.match.topOut(conn.id))
+        return
+      }
+      case 'target': {
+        const sess = sessionFor(conn)
+        if (!sess) return
+        const lobby = registry.get(sess.lobbyCode)
+        if (lobby) for (const ev of sess.match.target(conn.id, msg.mode, msg.targetId)) sendToLobby(lobby, ev)
+        return
+      }
       case 'lock': {
-        const sess = conn.lobbyCode ? sessions.get(`m${nextMatchId - 1}`) : undefined
-        if (!sess || !sess.session.has(conn.id)) {
+        const sess = sessionFor(conn)
+        if (!sess) {
           send(conn.ws, { type: 'error', code: 'not_in_match', message: 'you are not in an active match' })
           return
         }
-        for (const ev of sess.session.move(conn.id, msg.lock)) {
+        for (const ev of sess.match.move(conn.id, msg.lock)) {
           if (ev.type === 'garbage') {
             const target = conns.get(ev.to)
             if (target) send(target.ws, { type: 'garbage', lines: ev.lines, hole: ev.hole, from: ev.from })
+          } else {
+            const lobby = registry.get(sess.lobbyCode)
+            if (lobby) sendToLobby(lobby, ev)
           }
         }
         return
       }
       case 'snapshot': {
-        const sess = conn.lobbyCode ? sessions.get(`m${nextMatchId - 1}`) : undefined
-        if (!sess || !sess.session.has(conn.id)) return
-        const res = sess.session.checkSnapshot(conn.id, msg.board, msg.score)
+        const sess = sessionFor(conn, msg.matchId)
+        if (!sess) return
+        const res = sess.match.snapshot(conn.id, msg.board, msg.score)
+        const lobby = registry.get(sess.lobbyCode)
+        if (lobby) sendToLobby(lobby, { type: 'board_update', playerId: conn.id, board: msg.board, score: msg.score, pendingGarbage: sess.match.pending(conn.id) })
         if (res.status === 'resync') {
           send(conn.ws, { type: 'resync', board: res.board, pendingGarbage: res.pendingGarbage, score: res.score })
         } else {
@@ -228,6 +267,12 @@ export function startServer(port: number): ServerHandle {
       conns.delete(conn.id)
       if (conn.lobbyCode) {
         const lobby = registry.get(conn.lobbyCode)
+        const match = sessionFor(conn)
+        if (lobby && match) {
+          emitMatchEvents(match, match.match.match.forfeit(conn.id))
+          match.match.session.remove(conn.id)
+        }
+        if (lobby) sendToLobby(lobby, { type: 'player_left', playerId: conn.id })
         conn.lobbyCode = null
         if (lobby) handleLeave(conn, lobby)
       }
