@@ -1,4 +1,4 @@
-# Tetris Relinked
+# Tetris Relink
 
 [Play here.](https://happppya.github.io/tetris-relinked)
 
