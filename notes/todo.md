@@ -135,3 +135,8 @@ Status legend: [ ] todo · [~] in progress · [x] done
 ## Handling presets (NOOB / PRO)
 
 - New HANDLING presets in settings: NOOB (default; DAS 133 / ARR 33 / SDD 33, same as defaults) and PRO (DAS 80 / ARR 0 / SDD 0 — instant slides and soft drops). Buttons apply the full profile; active preset is auto-detected from current values (custom configs show "custom — tweak the sliders below"). Defaults derive from the noob preset constant so they can't drift.
+
+## GitHub Pages deployment workflow (proper)
+
+- Fixed .github/workflows/deploy.yml: base path was hardcoded to /tetris-liberation/ (repo is tetris-relink) — now derived from `${{ github.event.repository.name }}` so assets always resolve on the project site; added actions/configure-pages@v5, a .nojekyll touch before upload (Jekyll), and VITE_SERVER_URL from the repo variable `vars.VITE_SERVER_URL` (unset → localhost dev default).
+- connection.ts now treats an empty VITE_SERVER_URL as unset (`'' ?? default` previously kept the empty string and broke WebSocket('') on CI builds without the variable); 3 new unit tests pin the fallback + configured-URL behavior.

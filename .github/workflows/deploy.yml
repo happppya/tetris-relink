@@ -17,18 +17,41 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
+      # canonical Pages setup: prepares the environment and exposes the URL vars
+      - uses: actions/configure-pages@v5
+
       - run: npm ci
-      - run: npm run lint
-      - run: npm test
-      - run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        # project sites are served from /<repo-name>/, so the vite base path is
+        # derived from the repository name — stays correct across renames and
+        # forks. The multiplayer wss:// endpoint comes from a repository
+        # variable (set in Settings > Secrets and variables > Actions); when
+        # unset, the client keeps its localhost dev default.
+        run: npm run build
         env:
-          BASE_PATH: /tetris-liberation/
+          BASE_PATH: /${{ github.event.repository.name }}/
+          VITE_SERVER_URL: ${{ vars.VITE_SERVER_URL }}
+
+      # keep Jekyll from processing the artifact (files like _headers/404.html)
+      - name: Add .nojekyll
+        run: touch dist/.nojekyll
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

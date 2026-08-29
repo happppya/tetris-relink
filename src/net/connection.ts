@@ -2,7 +2,12 @@ import type { ClientMessage, ServerMessage } from '../../shared/protocol.ts'
 
 const DEFAULT_URL = 'ws://localhost:8787'
 
-export const serverUrl = (): string => (import.meta.env.VITE_SERVER_URL as string | undefined) ?? DEFAULT_URL
+// treat an unset OR empty VITE_SERVER_URL as "use the localhost dev default" —
+// CI builds pass an empty string when no repository variable is configured, and
+// `'' ?? default` would otherwise keep the empty string and break WebSocket()
+const rawServerUrl = import.meta.env.VITE_SERVER_URL as string | undefined
+
+export const serverUrl = (): string => (rawServerUrl && rawServerUrl.trim().length > 0 ? rawServerUrl : DEFAULT_URL)
 
 type Handler = (msg: ServerMessage) => void
 
