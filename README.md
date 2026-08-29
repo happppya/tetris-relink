@@ -77,6 +77,8 @@ Serve the generated `dist/` directory with any static hosting provider. For GitH
 BASE_PATH=/your-repository/ VITE_SERVER_URL=wss://your-server.example npm run build
 ```
 
+**GitHub Pages (recommended).** The deploy workflow (`.github/workflows/deploy.yml`) builds on every push to `master` and handles this automatically — it derives the base path from the repository name and bakes the production server URL into the build from a repository **Variable** (Settings → Secrets and variables → Actions → Variables → `VITE_SERVER_URL`, e.g. `wss://your-server.example`). If that variable is missing the build fails rather than shipping a site wired to a localhost server. Local development is unaffected: `npm run dev` keeps the `ws://localhost:8787` default with no environment set. See `.env.example` for the full dev/prod split.
+
 Run the server on the deployment host with Node.js 22.18 or newer:
 
 ```bash

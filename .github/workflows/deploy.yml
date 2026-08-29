@@ -31,6 +31,19 @@ jobs:
 
       - run: npm ci
 
+      # DEV vs PROD server URL: local development (npm run dev) leaves
+      # VITE_SERVER_URL unset and the client falls back to ws://localhost:8787
+      # automatically — no variables needed. A production Pages deploy instead
+      # bakes in the prod endpoint from a repository Variable (Settings >
+      # Secrets and variables > Actions > Variables, e.g. VITE_SERVER_URL =
+      # wss://your-server.example). Refusing to build without it prevents
+      # shipping a Pages site that silently points at a localhost server.
+      - name: Require production server URL
+        if: ${{ vars.VITE_SERVER_URL == '' && vars.ALLOW_EMPTY_SERVER_URL != 'true' }}
+        run: |
+          echo "::error::VITE_SERVER_URL is not set. Add a repository Variable (Settings > Secrets and variables > Actions > Variables) named VITE_SERVER_URL with your production WebSocket URL (e.g. wss://your-server.example) so this Pages build connects to it. Set ALLOW_EMPTY_SERVER_URL=true only to deploy deliberately without a multiplayer server."
+          exit 1
+
       - name: Lint
         run: npm run lint
 
@@ -40,9 +53,8 @@ jobs:
       - name: Build
         # project sites are served from /<repo-name>/, so the vite base path is
         # derived from the repository name — stays correct across renames and
-        # forks. The multiplayer wss:// endpoint comes from a repository
-        # variable (set in Settings > Secrets and variables > Actions); when
-        # unset, the client keeps its localhost dev default.
+        # forks. The multiplayer wss:// endpoint comes from the repository
+        # variable required above.
         run: npm run build
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
