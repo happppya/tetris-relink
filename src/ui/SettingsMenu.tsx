@@ -290,7 +290,6 @@ export function SettingsMenu({ onBack }: { onBack: () => void }) {
                   <button
                     key={p.id}
                     onClick={() => s.setFxPreset(p.id)}
-                    title={p.desc}
                     className={`border px-2 py-0.5 text-xs ${
                       active ? 'border-neutral-300 text-neutral-100' : 'border-neutral-700 text-neutral-500 hover:border-neutral-400'
                     }`}
@@ -301,11 +300,9 @@ export function SettingsMenu({ onBack }: { onBack: () => void }) {
               })}
             </span>
           </Row>
-          <p className="py-1 text-right font-mono text-xs text-neutral-500">
-            {presetFromConfig(s.fx)
-              ? FX_PRESET_INFO.find((p) => p.id === presetFromConfig(s.fx))?.desc
-              : 'custom — tweak individual parameters below'}
-          </p>
+          {presetFromConfig(s.fx) === null && (
+            <p className="py-1 text-right font-mono text-xs text-neutral-500">custom — tweak individual parameters below</p>
+          )}
           <Row label="Particles" hint="Sparks on line clears. OFF = none, ON = normal density, EXTRA = denser and faster bursts.">
             <span className="flex gap-1">
               {[0, 1, 2].map((v) => (
@@ -429,10 +426,6 @@ export function SettingsMenu({ onBack }: { onBack: () => void }) {
         </Section>
 
         <Section title="GAME PARAMETERS">
-          <p className="py-1 font-mono text-xs text-neutral-500">
-            Read-only attack table used by versus, multiplayer and zen. Combo scaling: attack = base × (1 + 0.25 × combo),
-            rounded down; zero-base clears grow via ln(1 + 1.25 × combo) from the 2-combo on.
-          </p>
           <Row label="Single" hint="Lines sent by a 1-line clear (0 in the default table).">
             <span className="text-neutral-300">{s.attack.single}</span>
           </Row>

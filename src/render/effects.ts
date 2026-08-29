@@ -38,14 +38,13 @@ export const FX_PRESET_ORDER: FxPreset[] = ['minimal', 'medium', 'high', 'ultra'
 export interface FxPresetInfo {
   id: FxPreset
   name: string
-  desc: string
 }
 
 export const FX_PRESET_INFO: FxPresetInfo[] = [
-  { id: 'minimal', name: 'MINIMAL', desc: 'no particles, rings or flashes; just row highlights and send popups' },
-  { id: 'medium', name: 'MEDIUM', desc: 'subtle bursts, row flash and tetris beams; quiet on singles/doubles/triples' },
-  { id: 'high', name: 'HIGH', desc: 'row flash, shockwaves, screen flashes, beams, impact dust and combo pulses' },
-  { id: 'ultra', name: 'ULTRA', desc: 'everything cranked; dense sparks and combo-scaled intensity' },
+  { id: 'minimal', name: 'MINIMAL' },
+  { id: 'medium', name: 'MEDIUM' },
+  { id: 'high', name: 'HIGH' },
+  { id: 'ultra', name: 'ULTRA' },
 ]
 
 /** Legacy mapping from the old 1-5 effect levels to the preset config. */

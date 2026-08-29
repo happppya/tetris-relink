@@ -39,18 +39,28 @@ export function MultiplayerScreen({ onBack }: { onBack: () => void }) {
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-4 font-mono">
-      <h1 className="text-xl tracking-[0.3em] text-neutral-200">MULTIPLAYER</h1>
-      <div className="flex w-80 justify-between text-xs text-neutral-500">
+      {/* connection status tucked into the corner, out of the centered flow */}
+      <div className="fixed right-3 top-3 flex items-center gap-2 text-xs text-neutral-500">
+        <span
+          className={`h-2 w-2 rounded-full ${
+            status === 'connected' ? 'bg-green-500' : status === 'reconnecting' || status === 'connecting' ? 'bg-yellow-500' : 'bg-red-500'
+          }`}
+        />
         <span>
           {status}
           {connected && latency !== null && ` · ${Math.round(latency)}ms`}
         </span>
-        <button onClick={onBack} className="text-neutral-400 hover:text-neutral-200">
-          ← MENU
-        </button>
       </div>
 
-      <Section title="PLAYER">
+      <h1 className="text-xl tracking-[0.3em] text-neutral-200">MULTIPLAYER</h1>
+      <button
+        onClick={onBack}
+        className="border border-neutral-500 bg-neutral-800 px-4 py-1.5 text-sm tracking-widest text-neutral-100 hover:border-neutral-300 hover:bg-neutral-600"
+      >
+        ← MENU
+      </button>
+
+      <Section title="USERNAME">
         <input
           value={name}
           maxLength={16}
