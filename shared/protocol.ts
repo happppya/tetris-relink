@@ -99,6 +99,6 @@ export type ServerMessage =
   | { type: 'garbage'; lines: number; hole: number; from: string }
   | { type: 'target_update'; playerId: string; mode: TargetMode; targetId: string | null }
   | { type: 'snapshot_ack'; seq: number }
-  | { type: 'resync'; board: Board; pendingGarbage: number; score: number }
+  | { type: 'resync'; board: Board; pendingGarbage: number }
   | { type: 'error'; code: string; message: string }
   | { type: 'pong'; t: number }

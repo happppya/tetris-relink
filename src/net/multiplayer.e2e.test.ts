@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { AddressInfo } from 'node:net'
-import { setReconnectGraceMs, startServer, type ServerHandle } from '../../server/index.ts'
+import { setClaimWindowMs, setReconnectGraceMs, startServer, type ServerHandle } from '../../server/index.ts'
 import { NetConnection } from './connection'
 import { createLobbyStore, type LobbyHook } from '../state/lobby'
 import { MatchClient } from './match-client'
@@ -766,6 +766,69 @@ describe('leave/disconnect races through the real stack', () => {
     await b3conn.close()
   })
 
+  it('a refresh presenting ANOTHER live player\'s id must not hijack their board', { timeout: 30000 }, async () => {
+    const prevClaim = setClaimWindowMs(150)
+    try {
+      const { a, b, matchId } = await setupMatch()
+      const playerA = makePlayer(matchId, a.conn, a.store, ['I'])
+      const playerB = makePlayer(matchId, b.conn, b.store, ['T'])
+      await settle()
+      const aId = a.store.getState().selfId!
+      const bId = b.store.getState().selfId!
+
+      // both players relay once so A's view of B and B's board exist
+      tick(playerA, ['hardDrop'])
+      tick(playerA, [], 0, 30)
+      tick(playerB, ['hardDrop'])
+      tick(playerB, [], 0, 30)
+      await settle(200)
+      await waitFor(() => playerA.client.getState().opponents[bId]?.board.length === 20, 'A sees B board')
+      expect(playerA.client.resyncs).toBe(0)
+
+      // B's tab shared its per-origin localStorage with A's tab (two tabs, one
+      // browser), so B's refresh presents A's id as its own rejoinId. A's socket
+      // stays open the whole time — a legit refresh's own close would land, but
+      // here it never does.
+      const b2conn = new NetConnection()
+      const b2 = createLobbyStore(b2conn)
+      const b2errors: string[] = []
+      b2conn.onMessage((msg) => {
+        if (msg.type === 'error' && msg.code !== 'host_transferred' && msg.code !== 'connection_lost') b2errors.push(msg.message)
+      })
+      b2.getState().setName('B')
+      b2.setState({ selfId: aId }) // corrupted: presenting the HOST's id
+      b2.getState().connect(url)
+      await waitFor(() => b2.getState().status === 'connected', 'B2 connected')
+
+      // B2 must NOT be granted the host's identity: it is a brand-new player
+      // (fresh id), gets no rejoin offer, no match, no lobby
+      expect(b2.getState().selfId).not.toBe(aId)
+      expect(b2.getState().pendingRejoin).toBeNull()
+      expect(b2.getState().match).toBeNull()
+      expect(b2.getState().lobby).toBeNull()
+
+      // the host is untouched: still in the match, no board resync (B2 never
+      // modified A's authority), and A still sees B's own board
+      expect(playerA.client.getState().finished).toBe(false)
+      expect(playerA.client.resyncs).toBe(0)
+      expect(playerA.client.getState().opponents[bId]?.board.length).toBe(20)
+      expect(server.stats().sessions).toBe(1)
+
+      // B2 cannot even rejoin as A: no offer was made, nothing to accept
+      b2.getState().rejoinGame()
+      await settle(100)
+      expect(b2.getState().match).toBeNull()
+      expect(b2.getState().lobby).toBeNull()
+      expect(b2errors).toHaveLength(0)
+
+      await closeClient(a)
+      await closeClient(b)
+      await b2conn.close()
+    } finally {
+      setClaimWindowMs(prevClaim)
+    }
+  })
+
   it('a rejoin offer is still actionable after the original disconnect grace expires', { timeout: 30000 }, async () => {
     const prev = setReconnectGraceMs(200)
     try {
@@ -823,9 +886,16 @@ describe('leave/disconnect races through the real stack', () => {
     b2.getState().setName('B')
     b2.setState({ selfId: oldBId })
     b2.getState().connect(url)
-    await waitFor(() => b2.getState().status === 'connected', 'B2 connected')
+    // the new socket beat its own close: B is still a LIVE member, so the server
+    // holds the claim (no welcome yet — it must not hand out a live identity to
+    // a socket that might not be this member's own refresh)
+    await settle(50)
+    expect(b2.getState().status).toBe('connecting')
 
-    // the rejoin offer is still issued -> the popup appears (it was missed before)
+    // the delayed original close lands: the claim completes — identity preserved,
+    // rejoin offer issued (the popup it missed before)
+    await b.conn.close()
+    await waitFor(() => b2.getState().status === 'connected', 'B2 connected')
     expect(b2.getState().pendingRejoin).not.toBeNull()
     expect(b2.getState().pendingRejoin!.lobbyCode).toBe(a.store.getState().lobby!.code)
     expect(b2.getState().selfId).toBe(oldBId) // identity preserved, no fresh id
@@ -847,21 +917,15 @@ describe('leave/disconnect races through the real stack', () => {
     await settle(150)
     await waitFor(() => playerA.client.getState().opponents[oldBId]?.board.length === 20, 'A sees B2 board')
     expect(playerA.client.getState().finished).toBe(false)
-
-    // the delayed original socket finally closes: it must NOT re-buffer / re-mark
-    // the member as reconnecting, and must not add a second copy
-    await b.conn.close()
-    await settle(150)
+    // no re-buffer / re-mark of the member from the completed claim, no second copy
     expect(a.store.getState().lobby!.players.filter((p) => p.id === oldBId)).toHaveLength(1)
     expect(a.store.getState().lobby!.players.find((p) => p.id === oldBId)?.reconnecting).toBe(false)
-    expect(playerA.client.getState().opponents[oldBId]?.board.length).toBe(20)
     expect(server.stats().sessions).toBe(1)
 
     await closeClient(a)
     if (b2.getState().lobby || b2.getState().match) b2.getState().leaveLobby()
     await settle(50)
     await b2conn.close()
-    await b.conn.close()
   })
 })
 

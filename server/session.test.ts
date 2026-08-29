@@ -21,15 +21,15 @@ describe('four-wide sessions', () => {
 
   it('walls the authoritative boards: an empty four-wide snapshot matches, a plain one does not', () => {
     const s = new Session('m1', [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], wideSettings)
-    expect(s.checkSnapshot('a', serializeBoard(fourWideBoard()), 0)).toEqual({ status: 'ok' })
-    expect(s.checkSnapshot('a', serializeBoard(emptyBoard()), 0).status).toBe('resync')
+    expect(s.checkSnapshot('a', serializeBoard(fourWideBoard()))).toEqual({ status: 'ok' })
+    expect(s.checkSnapshot('a', serializeBoard(emptyBoard())).status).toBe('resync')
   })
 
   it('rejects a placement that reports cells inside the wall', () => {
     const s = new Session('m1', [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], wideSettings)
     // placing into the grey side wall (column 0) is invalid: no attack, no mutation
     expect(s.move('a', { ...tetris, cells: [{ x: 0, y: 19 }] })).toEqual([])
-    expect(s.checkSnapshot('a', serializeBoard(fourWideBoard()), 0)).toEqual({ status: 'ok' })
+    expect(s.checkSnapshot('a', serializeBoard(fourWideBoard()))).toEqual({ status: 'ok' })
   })
 
   it('clamps garbage holes into the centre 4 columns and tells the client the clamped hole', () => {
@@ -43,7 +43,7 @@ describe('four-wide sessions', () => {
     }
     // a fresh game keeps the walls too
     s.newGame()
-    expect(s.checkSnapshot('b', serializeBoard(fourWideBoard()), 0)).toEqual({ status: 'ok' })
+    expect(s.checkSnapshot('b', serializeBoard(fourWideBoard()))).toEqual({ status: 'ok' })
   })
 })
 
@@ -52,7 +52,7 @@ describe('Session', () => {
     const s = makeSession()
     expect(s.summary.players).toHaveLength(3)
     for (const p of s.summary.players) {
-      expect(s.checkSnapshot(p.id, serializeBoard(emptyBoard()), 0)).toEqual({ status: 'ok' })
+      expect(s.checkSnapshot(p.id, serializeBoard(emptyBoard()))).toEqual({ status: 'ok' })
     }
   })
 
@@ -80,9 +80,9 @@ describe('Session', () => {
       r[4] = 'O'
       return r
     })
-    expect(s.checkSnapshot('a', serializeBoard(correct), 0)).toEqual({ status: 'ok' })
+    expect(s.checkSnapshot('a', serializeBoard(correct))).toEqual({ status: 'ok' })
     // a diverged snapshot (empty board) is resynced to the authoritative board
-    const res = s.checkSnapshot('a', serializeBoard(emptyBoard()), 0)
+    const res = s.checkSnapshot('a', serializeBoard(emptyBoard()))
     expect(res.status).toBe('resync')
     if (res.status === 'resync') expect(res.board).toBe(serializeBoard(correct))
   })
@@ -91,7 +91,7 @@ describe('Session', () => {
     const s = makeSession()
     const bogus: LockEvent = { rows: 4, spin: 'none', piece: 'I', perfectClear: false, combo: 0, b2b: false, streak: 0, cells: [{ x: 9, y: 0 }, { x: 9, y: -1 }] }
     expect(s.move('a', bogus)).toEqual([]) // no attack rewarded
-    const res = s.checkSnapshot('a', serializeBoard(emptyBoard().map((row, i) => (i === 19 ? ['T', ...row.slice(1)] : row))), 0)
+    const res = s.checkSnapshot('a', serializeBoard(emptyBoard().map((row, i) => (i === 19 ? ['T', ...row.slice(1)] : row))))
     expect(res.status).toBe('resync')
     if (res.status === 'resync') expect(res.board).toBe(serializeBoard(emptyBoard()))
   })
@@ -100,15 +100,15 @@ describe('Session', () => {
     const s = makeSession()
     s.move('a', tetris)
     s.dropPlayer('b')
-    expect(s.checkSnapshot('b', serializeBoard(emptyBoard()), 0)).toEqual({ status: 'ok' })
+    expect(s.checkSnapshot('b', serializeBoard(emptyBoard()))).toEqual({ status: 'ok' })
     s.dropPlayer('b')
-    expect(s.checkSnapshot('b', serializeBoard(emptyBoard()), 0)).toEqual({ status: 'ok' })
+    expect(s.checkSnapshot('b', serializeBoard(emptyBoard()))).toEqual({ status: 'ok' })
   })
 
   it('ignores moves and snapshots from unknown players', () => {
     const s = makeSession()
     expect(s.move('nope', tetris)).toEqual([])
-    expect(s.checkSnapshot('nope', serializeBoard(emptyBoard()), 0)).toEqual({ status: 'ok' })
+    expect(s.checkSnapshot('nope', serializeBoard(emptyBoard()))).toEqual({ status: 'ok' })
   })
 
   it('a removed player can rejoin with a fresh authority', () => {
@@ -116,30 +116,16 @@ describe('Session', () => {
     const placement: LockEvent = { rows: 0, spin: 'none', piece: 'O', perfectClear: false, combo: 0, b2b: false, streak: 0, cells: [{ x: 3, y: 19 }, { x: 4, y: 19 }] }
     s.move('a', placement)
     // a's authority board now differs from an empty board
-    expect(s.checkSnapshot('a', serializeBoard(emptyBoard()), 0).status).toBe('resync')
+    expect(s.checkSnapshot('a', serializeBoard(emptyBoard())).status).toBe('resync')
     s.remove('a')
     expect(s.has('a')).toBe(false)
-    expect(s.checkSnapshot('a', serializeBoard(emptyBoard()), 0)).toEqual({ status: 'ok' })
+    expect(s.checkSnapshot('a', serializeBoard(emptyBoard()))).toEqual({ status: 'ok' })
     s.add({ id: 'a', name: 'A' })
     expect(s.has('a')).toBe(true)
     // fresh authority: an empty snapshot matches, no stale board or garbage
-    expect(s.checkSnapshot('a', serializeBoard(emptyBoard()), 0)).toEqual({ status: 'ok' })
+    expect(s.checkSnapshot('a', serializeBoard(emptyBoard()))).toEqual({ status: 'ok' })
     expect(s.pendingGarbageOf('a')).toBe(0)
     expect(s.move('a', tetris)).toHaveLength(2)
-  })
-
-  it('tracks round scores and resets them at each new game', () => {
-    const s = makeSession()
-    expect(s.scores()).toEqual({ a: 0, b: 0, c: 0 })
-    // a tetris awards the full table attack; a single is worth 0
-    s.move('a', tetris)
-    s.move('b', noAttack)
-    const roundScores = s.scores()
-    expect(roundScores.a).toBeGreaterThan(0)
-    expect(roundScores.b).toBe(0)
-    // a fresh game resets the round scores (only game score persists in the lobby)
-    s.newGame()
-    expect(s.scores()).toEqual({ a: 0, b: 0, c: 0 })
   })
 
   it('never targets a spectator and keeps spectating out of the active count', () => {

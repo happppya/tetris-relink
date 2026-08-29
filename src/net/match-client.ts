@@ -384,12 +384,13 @@ export class MatchClient {
 
       case 'resync': {
         // the server is authoritative for boards: adopt its state (plus any
-        // garbage still owed) so a genuinely-desynced client converges
+        // garbage still owed) so a genuinely-desynced client converges. The
+        // client keeps its own engine score (the server no longer tracks scores).
         this.resyncs++
         const board = deserializeBoard(msg.board) as Cell[][]
         if (board.length === 20 && board.every((row) => row.length === 10)) {
           const snap = this.game.snapshot()
-          this.game.restore({ ...snap, board: [...snap.board.slice(0, HIDDEN_H), ...board], score: msg.score, garbageQueue: [] })
+          this.game.restore({ ...snap, board: [...snap.board.slice(0, HIDDEN_H), ...board], garbageQueue: [] })
           if (msg.pendingGarbage > 0) this.game.receiveGarbage(msg.pendingGarbage, false, 0)
         }
         this.setState({ error: null })

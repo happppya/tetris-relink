@@ -19,7 +19,6 @@ interface PlayerState {
   id: string
   name: string
   auth: BoardAuthority
-  score: number
   mode: TargetMode
   manualTarget: string | null
   attackers: string[]
@@ -27,7 +26,7 @@ interface PlayerState {
 
 export type SnapshotResult =
   | { status: 'ok' }
-  | { status: 'resync'; board: string; pendingGarbage: number; score: number }
+  | { status: 'resync'; board: string; pendingGarbage: number }
 export type SessionEvent =
   | { type: 'garbage'; to: string; lines: number; hole: number; from: string }
   | { type: 'target_update'; playerId: string; mode: TargetMode; targetId: string | null }
@@ -46,7 +45,7 @@ export class Session {
     this.settings = { ...settings }
     const fourWide = settings.fourWide
     for (const m of members) {
-      this.players.set(m.id, { id: m.id, name: m.name, auth: createAuthority(fourWide), score: 0, mode: 'random', manualTarget: null, attackers: [] })
+      this.players.set(m.id, { id: m.id, name: m.name, auth: createAuthority(fourWide), mode: 'random', manualTarget: null, attackers: [] })
     }
   }
 
@@ -56,13 +55,6 @@ export class Session {
 
   has(id: string): boolean { return this.players.has(id) }
   pendingGarbageOf(id: string): number { return this.players.get(id) ? pendingGarbage(this.players.get(id)!.auth) : 0 }
-
-  /** Current per-player round scores (reset at each new game). */
-  scores(): Record<string, number> {
-    const out: Record<string, number> = {}
-    for (const [id, p] of this.players) out[id] = p.score
-    return out
-  }
 
   /** Mark a player out of the current game (e.g. top-out); it can no longer be targeted. */
   eliminate(id: string): void {
@@ -89,7 +81,7 @@ export class Session {
     return this.players.size - this.spectators.size
   }
 
-  /** A fresh game starts: everyone is eligible again, targeting, boards and round scores reset. */
+  /** A fresh game starts: everyone is eligible again, targeting, boards reset. */
   newGame(): void {
     this.unavailable.clear()
     for (const player of this.players.values()) {
@@ -97,7 +89,6 @@ export class Session {
       player.mode = 'random'
       player.manualTarget = null
       player.attackers = []
-      player.score = 0
     }
   }
 
@@ -142,7 +133,6 @@ export class Session {
       total = computeAttack({ count: lock.rows, spin: lock.spin, piece: lock.piece, perfectClear: lock.perfectClear } as ClearInfo, DEFAULT_ATTACK, lock.combo, lock.b2b, lock.streak).totalLines
       surplus = total
     }
-    from.score += total
 
     if (surplus <= 0) return []
     const targetId = this.targetFor(from, byId)
@@ -160,18 +150,18 @@ export class Session {
   }
 
   /** Cross-check a client snapshot against the authoritative board; resync on divergence. */
-  checkSnapshot(id: string, board: string, _score: number): SnapshotResult {
+  checkSnapshot(id: string, board: string): SnapshotResult {
     const p = this.players.get(id)
     if (!p) return { status: 'ok' }
     const authoritative = serializeAuthority(p.auth)
     if (authoritative === board) return { status: 'ok' }
-    return { status: 'resync', board: authoritative, pendingGarbage: pendingGarbage(p.auth), score: p.score }
+    return { status: 'resync', board: authoritative, pendingGarbage: pendingGarbage(p.auth) }
   }
 
   /** A player returns from AFK: re-enter the session with a fresh authority. */
   add(member: SessionMember): void {
     if (this.players.has(member.id)) return
-    this.players.set(member.id, { id: member.id, name: member.name, auth: createAuthority(this.settings.fourWide), score: 0, mode: 'random', manualTarget: null, attackers: [] })
+    this.players.set(member.id, { id: member.id, name: member.name, auth: createAuthority(this.settings.fourWide), mode: 'random', manualTarget: null, attackers: [] })
   }
 
   dropPlayer(id: string): void { this.remove(id) }

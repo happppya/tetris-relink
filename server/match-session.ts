@@ -19,7 +19,7 @@ export class MatchSession {
   has(id: string): boolean { return this.session.has(id) }
   move(id: string, lock: LockEvent): SessionEvent[] { return this.session.move(id, lock) }
   target(id: string, mode: TargetMode, targetId?: string): SessionEvent[] { return this.session.setTarget(id, mode, targetId) }
-  snapshot(id: string, board: string, score: number) { return this.session.checkSnapshot(id, board, score) }
+  snapshot(id: string, board: string) { return this.session.checkSnapshot(id, board) }
   pending(id: string): number { return this.session.pendingGarbageOf(id) }
   remove(id: string): void { this.session.remove(id) }
   freshBoard(): Board { return serializeBoard(this.settings.fourWide ? fourWideBoard() : emptyBoard()) }

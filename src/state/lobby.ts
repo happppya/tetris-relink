@@ -1,7 +1,7 @@
 import { create } from 'zustand'
-import { createJSONStorage, persist } from 'zustand/middleware'
 import { NetConnection, net } from '../net/connection'
 import { sanitizeLobbySettings, sanitizeName } from '../../shared/lobby-settings.ts'
+import { clearSelfId, loadName, loadSelfId, saveName, saveSelfId } from './identity'
 import type { LobbySettings, LobbyState, PublicLobbyInfo, ServerMessage, Visibility } from '../../shared/protocol.ts'
 
 export type ConnStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
@@ -82,6 +82,8 @@ export function createLobbyStore(conn: NetConnection = net) {
     switch (msg.type) {
       case 'welcome':
         reconnectAttempts = 0
+        // per-tab identity: only this tab may remember this id (sessionStorage)
+        saveSelfId(msg.selfId)
         store.setState({ status: 'connected', selfId: msg.selfId, error: null })
         // an in-app auto-reconnect already sent `rejoin` when the offer landed,
         // so don't also re-join the lobby via code here
@@ -142,19 +144,21 @@ export function createLobbyStore(conn: NetConnection = net) {
     }
   }
 
-  const store = create<LobbyStore>()(
-    persist(
-      (set, get) => ({
-        status: 'disconnected',
-        latency: null,
-        error: null,
-        lobby: null,
-        selfId: null,
-        name: 'PLAYER',
-        lobbies: [],
-        pendingRejoin: null,
-        match: null,
-        setName: (name) => set({ name: sanitizeName(name) }),
+  const store = create<LobbyStore>()((set, get) => ({
+    status: 'disconnected',
+    latency: null,
+    error: null,
+    lobby: null,
+    selfId: loadSelfId(),
+    name: loadName(),
+    lobbies: [],
+    pendingRejoin: null,
+    match: null,
+    setName: (name) => {
+      const clean = sanitizeName(name)
+      saveName(clean)
+      set({ name: clean })
+    },
         connect: (url?: string) => {
           if (conn.connected || get().status === 'connecting' || get().status === 'reconnecting') return
           connectUrl = url
@@ -174,6 +178,9 @@ export function createLobbyStore(conn: NetConnection = net) {
           conn.close()
           lastCode = null
           reconnectAttempts = 0
+          // a deliberate disconnect drops the per-tab identity: a fresh load is
+          // a fresh player (the next connect gets a brand-new id)
+          clearSelfId()
           set({ status: 'disconnected', lobby: null, match: null, error: null, pendingRejoin: null })
         },
         createLobby: (visibility, settings) => {
@@ -220,15 +227,7 @@ export function createLobbyStore(conn: NetConnection = net) {
           set({ pendingRejoin: null })
         },
         clearMatch: () => set({ match: null }),
-      }),
-      {
-        name: 'tetris-liberation-lobby',
-        // selfId is persisted so a refresh can present the previous identity to
-        // the server and be offered a rejoin of the game they were in
-        partialize: (s) => ({ name: s.name, selfId: s.selfId }),
-        storage: createJSONStorage(() => localStorage),
-      },
-    ),
+    }),
   )
 
   conn.onMessage(applyMessage)

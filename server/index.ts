@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import { LobbyRegistry } from './registry.ts'
 import { Lobby, MAX_PLAYERS, type Member } from './lobby.ts'
 import { MatchSession } from './match-session.ts'
-import type { MatchEvent } from '../src/engine/match.ts'
+import type { Match, MatchEvent } from '../src/engine/match.ts'
 import { sanitizeLobbySettings, sanitizeName } from '../shared/lobby-settings.ts'
 import type { ClientMessage, LobbyState, ServerMessage, Visibility } from '../shared/protocol.ts'
 
@@ -56,6 +56,21 @@ export function setReconnectGraceMs(ms: number): number {
   return prev
 }
 
+/**
+ * How long a `hello` presenting a *live* member's id may wait for that member's
+ * own socket to close before it is rejected with a fresh identity. A refresh
+ * races its own close by a few milliseconds, so the window must be wide enough
+ * for the close to land; a claim that survives the window is a DIFFERENT client
+ * (e.g. a second tab whose shared persisted id collided) and must not be granted
+ * the member's identity. Exported so tests can shrink the window.
+ */
+let claimWindowMs = 3000
+export function setClaimWindowMs(ms: number): number {
+  const prev = claimWindowMs
+  claimWindowMs = ms
+  return prev
+}
+
 interface BufferedConn {
   /** the original connection object (socket closed, but id/lobbyCode preserved) */
   conn: Conn
@@ -71,6 +86,12 @@ export function startServer(port: number): ServerHandle {
   const sessionsByLobby = new Map<string, SessionHandle[]>()
   /** unexpectedly-disconnected players held for the grace period pending rejoin */
   const buffered = new Map<string, BufferedConn>()
+  /**
+   * live-member claims: rejoinId -> the new socket presenting it, held until the
+   * member's own (still-open) socket closes (a refresh racing its own close) or
+   * a short window passes (a DIFFERENT client — never grant the identity).
+   */
+  const pendingClaims = new Map<string, { conn: Conn; timer: ReturnType<typeof setTimeout> }>()
   const server = createServer()
   const wss = new WebSocketServer({ server })
 
@@ -171,6 +192,17 @@ export function startServer(port: number): ServerHandle {
   }
 
   /**
+   * The intermission round score: ONLY the round outcome — the round's winner
+   * gets +1 and everyone else 0 (a draw gives everyone 0). No attack lines,
+   * no accumulated engine score.
+   */
+  const roundScores = (match: Match, winnerId: string | null): Record<string, number> => {
+    const out: Record<string, number> = {}
+    for (const p of match.playerList) out[p.id] = p.id === winnerId ? 1 : 0
+    return out
+  }
+
+  /**
    * The lobby a player id is currently a live member of, via their *active*
    * connection (still in conns, close not yet processed). Used when a page
    * refresh's new socket beats its own old socket's close: the player isn't in
@@ -181,6 +213,40 @@ export function startServer(port: number): ServerHandle {
     if (!live?.lobbyCode) return undefined
     const lobby = registry.get(live.lobbyCode)
     return lobby?.getMember(id) ? lobby : undefined
+  }
+
+  /**
+   * Bind a returning socket to a member's identity and offer the rejoin. The
+   * buffered entry keeps the *previous* (closed) conn so `pruneBuffered` can
+   * still find the match via that conn's lobbyCode when a claimer never decides
+   * (the returning socket's own lobbyCode is null until it accepts the offer).
+   */
+  const adoptRejoin = (conn: Conn, rejoinId: string, lobby: Lobby, fallbackName: string | null = null): void => {
+    const entry = buffered.get(rejoinId)
+    const member = lobby.getMember(rejoinId)
+    if (!member) {
+      send(conn.ws, { type: 'welcome', selfId: conn.id })
+      return
+    }
+    member.reconnecting = true
+    if (!entry) {
+      buffered.set(rejoinId, {
+        conn,
+        lobbyCode: lobby.code,
+        timer: setTimeout(() => pruneBuffered(rejoinId), reconnectGraceMs),
+      })
+    } else {
+      clearTimeout(entry.timer)
+      entry.timer = setTimeout(() => pruneBuffered(rejoinId), reconnectGraceMs)
+    }
+    broadcastRoster(lobby)
+    const matchActive = (sessionsByLobby.get(lobby.code) ?? []).some((s) => s.match.match.status === 'active' && s.match.has(rejoinId))
+    conns.delete(conn.id)
+    conn.id = rejoinId
+    conn.name = sanitizeName(conn.name ?? '', fallbackName ?? undefined)
+    conns.set(conn.id, conn)
+    send(conn.ws, { type: 'rejoin_offer', lobbyCode: lobby.code, matchActive })
+    send(conn.ws, { type: 'welcome', selfId: conn.id })
   }
 
   const sessionFor = (conn: Conn, matchId?: string): SessionHandle | undefined => {
@@ -254,12 +320,12 @@ export function startServer(port: number): ServerHandle {
     // ongoing N>2 case (death without a round resolution) gets its own game_end.
     const roundEndsInBatch = events.some((e) => e.type === 'game_won' || e.type === 'game_draw')
     for (const event of events) {
-      if (event.type === 'eliminated' && event.alive > 0 && !roundEndsInBatch) sendToLobby(lobby, { type: 'game_end', round: entry.match.match.round, winnerId: null, eliminatedIds: [event.playerId], wins: entry.match.match.wins(), scores: entry.match.session.scores() })
+      if (event.type === 'eliminated' && event.alive > 0 && !roundEndsInBatch) sendToLobby(lobby, { type: 'game_end', round: entry.match.match.round, winnerId: null, eliminatedIds: [event.playerId], wins: entry.match.match.wins(), scores: roundScores(entry.match.match, null) })
       if (event.type === 'game_won') {
-        // scores() must be read before startNextGame resets the round scores
-        sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: event.winnerId, eliminatedIds: [], wins: event.wins, scores: entry.match.session.scores() })
+        // roundScores must be read before startNextGame starts the next round
+        sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: event.winnerId, eliminatedIds: [], wins: event.wins, scores: roundScores(entry.match.match, event.winnerId) })
       }
-      if (event.type === 'game_draw') sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: null, eliminatedIds: [], wins: entry.match.match.wins(), scores: entry.match.session.scores() })
+      if (event.type === 'game_draw') sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: null, eliminatedIds: [], wins: entry.match.match.wins(), scores: roundScores(entry.match.match, null) })
       if (event.type === 'match_won') {
         // winning the whole match (series) earns exactly +1 game score on the
         // winner's lobby member — nothing per round, others get nothing — and
@@ -275,7 +341,7 @@ export function startServer(port: number): ServerHandle {
         // the match is over: drop the session so a later match in the same
         // lobby can't be polluted by stale routing to this one
         removeSession(entry.match.matchId)
-        sendToLobby(lobby, { type: 'match_end', winnerId: event.winnerId, wins: event.wins, scores: entry.match.session.scores() })
+        sendToLobby(lobby, { type: 'match_end', winnerId: event.winnerId, wins: event.wins, scores: roundScores(entry.match.match, event.winnerId) })
       }
       if (event.type === 'game_won' && entry.match.match.status === 'active') startNextGame()
       if (event.type === 'game_draw') startNextGame()
@@ -295,52 +361,47 @@ export function startServer(port: number): ServerHandle {
     switch (msg.type) {
       case 'hello': {
         conn.name = sanitizeName(msg.name)
-        // a player returning after an unexpected disconnect presents their
-        // previous id: adopt that identity and offer the rejoin (they stay
-        // buffered until they choose, or the grace period runs out). The offer
-        // is sent before welcome so the client can act on it in order.
+        // A player returning after an unexpected disconnect presents their
+        // previous id. Two cases:
         //
-        // Normally the close handler already buffered them under that id. When a
-        // refresh's new socket beats its own old socket's close, they aren't
-        // buffered yet but their id is still a *live* member — materialize the
-        // buffer right here so we still offer the popup instead of re-joining
-        // them under a brand-new identity (which stranded a "reconnecting" copy).
-        if (msg.rejoinId && (buffered.has(msg.rejoinId) || liveMemberLobby(msg.rejoinId))) {
+        // 1. The id is BUFFERED — their socket already closed and they were kept
+        //    in the lobby + match for the grace period: adopt the identity and
+        //    offer the rejoin right away (offer sent before welcome so the
+        //    client can act on it in order).
+        // 2. The id is a *live* member whose socket is STILL OPEN — a refresh
+        //    whose new socket beat its own close, OR a different client (e.g. a
+        //    second tab whose shared persisted id collided) trying to present it.
+        //    Do NOT grant a live member's identity on sight: hold the claim until
+        //    that member's own socket closes (a real refresh — the close is in
+        //    flight) or a short window passes (a hijack — start fresh instead).
+        if (msg.rejoinId && buffered.has(msg.rejoinId)) {
           const rejoinId = msg.rejoinId
-          const entry = buffered.get(rejoinId)
-          const lobby = entry ? registry.get(entry.lobbyCode) : liveMemberLobby(rejoinId)
+          const entry = buffered.get(rejoinId)!
+          const lobby = registry.get(entry.lobbyCode)
           if (!lobby) {
-            // a stale id that is neither buffered nor a member: fresh start
             send(conn.ws, { type: 'welcome', selfId: conn.id })
             return
           }
-          if (!entry) {
-            const member = lobby.getMember(rejoinId)!
-            member.reconnecting = true
-            buffered.set(rejoinId, {
-              conn,
-              lobbyCode: lobby.code,
-              timer: setTimeout(() => pruneBuffered(rejoinId), reconnectGraceMs),
-            })
-            broadcastRoster(lobby)
+          adoptRejoin(conn, rejoinId, lobby, entry.conn.name)
+          return
+        }
+        if (msg.rejoinId && liveMemberLobby(msg.rejoinId)) {
+          const rejoinId = msg.rejoinId
+          const prev = pendingClaims.get(rejoinId)
+          if (prev) {
+            // a newer claim supersedes an older one waiting on the same member
+            clearTimeout(prev.timer)
+            send(prev.conn.ws, { type: 'welcome', selfId: prev.conn.id })
           }
-          const matchActive = (sessionsByLobby.get(lobby.code) ?? []).some((s) => s.match.match.status === 'active' && s.match.has(rejoinId))
-          conns.delete(conn.id)
-          conn.id = rejoinId
-          conns.delete(conn.id)
-          conn.id = msg.rejoinId
-          conn.name = sanitizeName(msg.name, entry?.conn.name ?? undefined)
-          conns.set(conn.id, conn)
-          // the player is back and holding the choice: restart the grace window
-          // from the offer so it can't expire on the disconnect clock while they
-          // are still reading the popup (a claimer who never decides is still
-          // pruned after one full grace)
-          if (entry) {
-            clearTimeout(entry.timer)
-            entry.timer = setTimeout(() => pruneBuffered(rejoinId), reconnectGraceMs)
-          }
-          send(conn.ws, { type: 'rejoin_offer', lobbyCode: lobby.code, matchActive })
-          send(conn.ws, { type: 'welcome', selfId: conn.id })
+          pendingClaims.set(rejoinId, {
+            conn,
+            timer: setTimeout(() => {
+              // the member's own socket never closed: this is not a refresh —
+              // never hijack the live member; start the claimer as a fresh player
+              if (pendingClaims.get(rejoinId)?.conn === conn) pendingClaims.delete(rejoinId)
+              send(conn.ws, { type: 'welcome', selfId: conn.id })
+            }, claimWindowMs),
+          })
           return
         }
         send(conn.ws, { type: 'welcome', selfId: conn.id })
@@ -596,7 +657,7 @@ export function startServer(port: number): ServerHandle {
         if (!sess) return
         // Cross-check the client's board against the server-authoritative copy;
         // on real divergence, resync the client instead of letting it silently drift.
-        const res = sess.match.snapshot(conn.id, msg.board, msg.score)
+        const res = sess.match.snapshot(conn.id, msg.board)
         const lobby = registry.get(sess.lobbyCode)
         // the round lets clients drop stale relays from a previous round that are
         // still in flight when the next round's game_start arrives; the sender is
@@ -617,7 +678,7 @@ export function startServer(port: number): ServerHandle {
             next: msg.next ?? [],
           })
         if (res.status === 'resync') {
-          send(conn.ws, { type: 'resync', board: res.board, pendingGarbage: res.pendingGarbage, score: res.score })
+          send(conn.ws, { type: 'resync', board: res.board, pendingGarbage: res.pendingGarbage })
         } else {
           send(conn.ws, { type: 'snapshot_ack', seq: msg.seq })
         }
@@ -645,7 +706,32 @@ export function startServer(port: number): ServerHandle {
       }
     })
     ws.on('close', () => {
-      // only act if this socket still owns its id. After a rejoin-claim, a
+      // 1) a live-member claim was waiting on THIS socket to close (a refresh
+      // whose new socket beat its own close): the close has landed, so complete
+      // the claim — the waiting socket adopts the member's identity and gets
+      // the rejoin offer, exactly as if the member had been buffered first.
+      const pending = pendingClaims.get(conn.id)
+      if (pending) {
+        pendingClaims.delete(conn.id)
+        clearTimeout(pending.timer)
+        const claimer = pending.conn
+        if (conns.get(claimer.id) === claimer) {
+          const lobby = conn.lobbyCode ? registry.get(conn.lobbyCode) : undefined
+          if (lobby && lobby.getMember(conn.id)) adoptRejoin(claimer, conn.id, lobby, conn.name)
+          else send(claimer.ws, { type: 'welcome', selfId: claimer.id })
+        }
+        return
+      }
+      // 2) this socket is itself a claimer that gave up before the member's
+      // socket closed: drop the claim so it can't complete against a dead socket
+      for (const [rejoinId, claim] of pendingClaims) {
+        if (claim.conn === conn) {
+          pendingClaims.delete(rejoinId)
+          clearTimeout(claim.timer)
+          break
+        }
+      }
+      // 3) only act if this socket still owns its id. After a rejoin-claim, a
       // stale duplicate (second refresh / second tab, or this socket's own
       // delayed close from a refresh whose new socket was processed first)
       // holds the same id — its close must not yank the live claimer's routing
@@ -712,6 +798,8 @@ export function startServer(port: number): ServerHandle {
         clearInterval(idleTimer)
         for (const entry of buffered.values()) clearTimeout(entry.timer)
         buffered.clear()
+        for (const claim of pendingClaims.values()) clearTimeout(claim.timer)
+        pendingClaims.clear()
         for (const conn of conns.values()) conn.ws.close()
         wss.close()
         server.close(() => resolve())

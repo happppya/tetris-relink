@@ -83,9 +83,9 @@ describe('MatchClient', () => {
   it('applies a resync board and re-queues the pending garbage', () => {
     const { game, client, feed } = harness()
     const withPiece = emptyBoard().map((row, i) => (i === 19 ? ['T', ...row.slice(1)] : row))
-    feed({ type: 'resync', board: serializeBoard(withPiece), pendingGarbage: 3, score: 50 })
+    feed({ type: 'resync', board: serializeBoard(withPiece), pendingGarbage: 3 })
     expect(serializeBoard(game.board.slice(-20))).toBe(serializeBoard(withPiece))
-    expect(game.score).toBe(50)
+    expect(game.score).toBe(0) // the resync no longer touches the engine score
     expect(game.pendingGarbage).toBe(3)
     expect(client.resyncs).toBe(1)
   })
