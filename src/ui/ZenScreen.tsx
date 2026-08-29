@@ -144,7 +144,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
         for (const ev of events) {
           if (ev.type === 'clear') {
             if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
-            if (settings.fx.sendPopups) sendPopups.push(ev.attack, runner.game.combo, now)
+            if (settings.fx.sendPopups) sendPopups.push(ev.attack, runner.game.combo, now, ev.rows, ev.pieceX, CELL)
             fx.lineClear(ev.rows, CELL, ev.info, ev.attack, runner.game.combo)
             if (zenRef.current.garbage === 'backfire') {
               runner.game.receiveGarbage(Math.round(ev.attack.totalLines * zenRef.current.multiplier), true)

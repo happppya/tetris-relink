@@ -262,6 +262,7 @@ describe('Streak mechanic', () => {
     const clear = events.find((e): e is Extract<GameEvent, { type: 'clear' }> => e.type === 'clear')
     expect(clear?.info.spin).toBe('full')
     expect(clear?.info.count).toBe(2)
+    expect(clear?.pieceX).toBe(0)
     expect(game.streak).toBe(1)
     expect(game.sentLines).toBe(4)
   })
@@ -285,6 +286,8 @@ describe('Streak mechanic', () => {
     expect(clear?.info.spin).toBe('full')
     expect(clear?.info.piece).toBe('L')
     expect(clear?.info.count).toBe(2)
+    // the rotate180 kick shifted the piece from x=5 to x=6 before locking
+    expect(clear?.pieceX).toBe(6)
     expect(game.streak).toBe(1)
     expect(game.sentLines).toBe(4)
   })

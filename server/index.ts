@@ -31,7 +31,13 @@ export interface ServerHandle {
   registry: LobbyRegistry
   server: import('node:http').Server
   /** live internal state sizes, for load/leak measurement */
-  stats: () => { conns: number; sessions: number; lobbies: number }
+  stats: () => {
+    conns: number
+    sessions: number
+    lobbies: number
+    /** cumulative work counters for profiling hot paths (monotonic, reset on restart) */
+    work: { sends: number; stringifies: number; sessionScans: number }
+  }
   /** force-close a client's socket (simulates a network drop / admin kick) */
   kick: (playerId: string) => void
   close: () => Promise<void>
@@ -61,28 +67,53 @@ export function startServer(port: number): ServerHandle {
   const registry = new LobbyRegistry()
   const conns = new Map<string, Conn>()
   const sessions = new Map<string, SessionHandle>()
+  /** active matches per lobby (a lobby has at most a handful; usually exactly one) */
+  const sessionsByLobby = new Map<string, SessionHandle[]>()
   /** unexpectedly-disconnected players held for the grace period pending rejoin */
   const buffered = new Map<string, BufferedConn>()
   const server = createServer()
   const wss = new WebSocketServer({ server })
 
+  // profiling counters: every ws.send, every JSON.stringify of a payload, and
+  // every entry scanned by the no-matchId session lookup
+  let sends = 0
+  let stringifies = 0
+  let sessionScans = 0
+
   const send = (ws: WebSocket, msg: ServerMessage) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg))
+    if (ws.readyState === WebSocket.OPEN) {
+      sends++
+      stringifies++
+      ws.send(JSON.stringify(msg))
+    }
   }
 
+  /** Send an already-serialized payload (broadcast fan-out reuses one stringify). */
+  const sendRaw = (ws: WebSocket, payload: string) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      sends++
+      ws.send(payload)
+    }
+  }
+
+  /** Serialize once, fan out to every connected member. */
   const sendToLobby = (lobby: Lobby, msg: ServerMessage) => {
+    stringifies++
+    const payload = JSON.stringify(msg)
     for (const member of lobby.memberList) {
       const conn = conns.get(member.id)
-      if (conn) send(conn.ws, msg)
+      if (conn) sendRaw(conn.ws, payload)
     }
   }
 
   /** Like sendToLobby but skips one member (used for per-player relays the sender already knows). */
   const sendToLobbyExcept = (lobby: Lobby, exceptId: string, msg: ServerMessage) => {
+    stringifies++
+    const payload = JSON.stringify(msg)
     for (const member of lobby.memberList) {
       if (member.id === exceptId) continue
       const conn = conns.get(member.id)
-      if (conn) send(conn.ws, msg)
+      if (conn) sendRaw(conn.ws, payload)
     }
   }
 
@@ -102,9 +133,10 @@ export function startServer(port: number): ServerHandle {
    * (the ones actually looking at the list screen). Keeps the browser's
    * lobby browser live without any manual refresh. */
   const broadcastLobbyList = () => {
-    const list: ServerMessage = { type: 'lobby_list', lobbies: registry.publicList() }
+    stringifies++
+    const payload = JSON.stringify({ type: 'lobby_list', lobbies: registry.publicList() })
     for (const conn of conns.values()) {
-      if (conn.lobbyCode === null) send(conn.ws, list)
+      if (conn.lobbyCode === null) sendRaw(conn.ws, payload)
     }
   }
 
@@ -113,7 +145,8 @@ export function startServer(port: number): ServerHandle {
     conn.lobbyCode = null
     if (empty) {
       registry.remove(lobby.code)
-      for (const [matchId, entry] of [...sessions]) if (entry.lobbyCode === lobby.code) sessions.delete(matchId)
+      // iterate a copy: removeSession splices the live array
+      for (const entry of [...(sessionsByLobby.get(lobby.code) ?? [])]) removeSession(entry.match.matchId)
       broadcastLobbyList()
       return
     }
@@ -125,6 +158,18 @@ export function startServer(port: number): ServerHandle {
     }
   }
 
+  const removeSession = (matchId: string): void => {
+    const entry = sessions.get(matchId)
+    if (!entry) return
+    sessions.delete(matchId)
+    const list = sessionsByLobby.get(entry.lobbyCode)
+    if (list) {
+      const i = list.indexOf(entry)
+      if (i >= 0) list.splice(i, 1)
+      if (list.length === 0) sessionsByLobby.delete(entry.lobbyCode)
+    }
+  }
+
   const sessionFor = (conn: Conn, matchId?: string): SessionHandle | undefined => {
     // only an *active* match is a valid routing target: a finished session must
     // never receive locks/snapshots, otherwise a second match in the same lobby
@@ -133,9 +178,15 @@ export function startServer(port: number): ServerHandle {
       const match = sessions.get(matchId)
       return match?.lobbyCode === conn.lobbyCode && match.match.match.status === 'active' && match.match.has(conn.id) ? match : undefined
     }
-    return [...sessions.values()].find(
-      (entry) => entry.lobbyCode === conn.lobbyCode && entry.match.match.status === 'active' && entry.match.has(conn.id),
-    )
+    // indexed by lobby instead of scanning every session in the server
+    const list = conn.lobbyCode ? sessionsByLobby.get(conn.lobbyCode) : undefined
+    if (list) {
+      for (const entry of list) {
+        sessionScans++
+        if (entry.match.match.status === 'active' && entry.match.has(conn.id)) return entry
+      }
+    }
+    return undefined
   }
 
   /** Permanently remove a player from their active match (leave or disconnect). */
@@ -204,7 +255,7 @@ export function startServer(port: number): ServerHandle {
         }
         // the match is over: drop the session so a later match in the same
         // lobby can't be polluted by stale routing to this one
-        sessions.delete(entry.match.matchId)
+        removeSession(entry.match.matchId)
         sendToLobby(lobby, { type: 'match_end', winnerId: event.winnerId, wins: event.wins, scores: entry.match.session.scores() })
       }
       if (event.type === 'game_won' && entry.match.match.status === 'active') startNextGame()
@@ -234,7 +285,7 @@ export function startServer(port: number): ServerHandle {
           const entry = buffered.get(rejoinId)!
           const lobby = registry.get(entry.lobbyCode)
           const matchActive = lobby
-            ? [...sessions.values()].some((s) => s.lobbyCode === lobby.code && s.match.match.status === 'active' && s.match.has(rejoinId))
+            ? (sessionsByLobby.get(lobby.code) ?? []).some((s) => s.match.match.status === 'active' && s.match.has(rejoinId))
             : false
           conns.delete(conn.id)
           conn.id = rejoinId
@@ -242,6 +293,12 @@ export function startServer(port: number): ServerHandle {
           conn.id = msg.rejoinId
           conn.name = sanitizeName(msg.name, entry.conn.name ?? undefined)
           conns.set(conn.id, conn)
+          // the player is back and holding the choice: restart the grace window
+          // from the offer so it can't expire on the disconnect clock while they
+          // are still reading the popup (a claimer who never decides is still
+          // pruned after one full grace)
+          clearTimeout(entry.timer)
+          entry.timer = setTimeout(() => pruneBuffered(rejoinId), reconnectGraceMs)
           send(conn.ws, { type: 'rejoin_offer', lobbyCode: entry.lobbyCode, matchActive })
           send(conn.ws, { type: 'welcome', selfId: conn.id })
           return
@@ -367,7 +424,11 @@ export function startServer(port: number): ServerHandle {
         const members = lobby.memberList.map((p) => ({ id: p.id, name: p.name }))
         const matchId = `m${nextMatchId++}`
         const match = new MatchSession(matchId, members, lobby.settings)
-        sessions.set(matchId, { match, lobbyCode: lobby.code })
+        const handle: SessionHandle = { match, lobbyCode: lobby.code }
+        sessions.set(matchId, handle)
+        const lobbyMatches = sessionsByLobby.get(lobby.code) ?? []
+        lobbyMatches.push(handle)
+        sessionsByLobby.set(lobby.code, lobbyMatches)
         // lobby-chosen spectators sit out every game of the match
         for (const m of lobby.memberList) {
           if (m.spectating) {
@@ -431,7 +492,7 @@ export function startServer(port: number): ServerHandle {
         }
         // return to the game: rejoin the active match in the remembered role
         member.afk = false
-        const entry = [...sessions.values()].find((e) => e.lobbyCode === lobby.code && e.match.match.status === 'active')
+        const entry = (sessionsByLobby.get(lobby.code) ?? []).find((e) => e.match.match.status === 'active')
         if (entry) {
           const rejoinAsSpectator = member.spectating === true
           entry.match.match.addPlayer(conn.id)
@@ -544,7 +605,11 @@ export function startServer(port: number): ServerHandle {
       }
     })
     ws.on('close', () => {
-      conns.delete(conn.id)
+      // only delete the entry if it still belongs to THIS socket: after a
+      // rejoin-claim, a stale duplicate claimer (second refresh / second tab)
+      // holds the same id, and its close must not yank the live claimer's
+      // routing entry out from under it
+      if (conns.get(conn.id) === conn) conns.delete(conn.id)
       if (conn.lobbyCode && !buffered.has(conn.id)) {
         const lobby = registry.get(conn.lobbyCode)
         const member = lobby?.getMember(conn.id)
@@ -578,7 +643,8 @@ export function startServer(port: number): ServerHandle {
       if (now - lobby.lastActivity > IDLE_MS) {
         sendToLobby(lobby, { type: 'error', code: 'lobby_closed', message: 'lobby closed due to inactivity' })
         registry.remove(lobby.code)
-        for (const [matchId, entry] of [...sessions]) if (entry.lobbyCode === lobby.code) sessions.delete(matchId)
+        // iterate a copy: removeSession splices the live array
+        for (const entry of [...(sessionsByLobby.get(lobby.code) ?? [])]) removeSession(entry.match.matchId)
         broadcastLobbyList()
       }
     }
@@ -589,7 +655,12 @@ export function startServer(port: number): ServerHandle {
   return {
     registry,
     server,
-    stats: () => ({ conns: conns.size, sessions: sessions.size, lobbies: registry.all().length }),
+    stats: () => ({
+      conns: conns.size,
+      sessions: sessions.size,
+      lobbies: registry.all().length,
+      work: { sends, stringifies, sessionScans },
+    }),
     kick: (playerId) => {
       const conn = conns.get(playerId)
       if (conn) conn.ws.close()

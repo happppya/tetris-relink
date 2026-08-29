@@ -149,3 +149,26 @@ Status legend: [ ] todo · [~] in progress · [x] done
 - Multiplayer: `LobbySettings.fourWide` (sanitized server-side, absent = off on the wire), 4-WIDE toggle in lobby ROOM SETTINGS (host-only), game screen builds its engine from match settings. Server authorities are walled, reject placements into the wall, and `queueGarbage` clamps holes and reports the clamped hole so the garbage event the client applies matches the server board exactly. `freshBoard()` (game_start) ships walled boards.
 - Renderer: 'W' drawn as a dark grey block.
 - Tests: engine (walls, well clear + walled fresh rows, hole clamp, cheese holes), session (walled authorities + snapshot match, wall-placement rejection, clamped hole event, walls survive newGame), E2E four-wide round through the real stack (both engines walled, 4 single clears route 2 lines via the ln rule, B's garbage holes all in 3..6, boards relay walled, zero resyncs).
+
+## Server hot-path optimization pass
+
+Profiled the real server with work counters (added to stats()): sends / stringifies / sessionScans, plus an authority-serialization counter. Before/after on a 8-player relay fan-out, 10 concurrent matches, and roster churn:
+
+- Broadcast serialization: sendToLobby/sendToLobbyExcept/broadcastLobbyList now stringify ONCE and fan out the same payload (was one JSON.stringify per recipient). 8-player relay: stringifies per broadcast 8 -> 1 (ratio 1.00 -> 0.25 over 192 snapshots); roster_update 8.0 -> 1.0.
+- Snapshot cross-check: the authority board's serialized form is cached and invalidated on mutation (place/clear/applyQueued/reset), so checkSnapshot is a string compare between mutations. Authority serializations for 192 steady-state snapshots: 192 -> 8.
+- Session lookup: sessions are indexed by lobby (sessionsByLobby, insertion order, same first-active-match semantics); the no-matchId path is O(lobby's matches) instead of an O(all sessions) scan + array copy. 10 concurrent matches: 10.0 -> 1.0 scans per lock.
+- Behavior identical: full suite 248/32 green, load test 4/4 (state sizes + churn-to-zero), disconnect/lifecycle/multiclient/message-loss/sequential green, E2E 23/23 x3. No latency regression (snapshot->ack p50 2.4 -> 2.1ms in-process; p95 flat).
+
+## Bug hunt: rejoin/grace race windows (found + fixed 2)
+
+- **Second refresh while a rejoin offer is pending** (class 3, reproduced through the real stack): when a second client claims the same rejoinId, the stale first claimer's ws close ran `conns.delete(conn.id)` and yanked the LIVE claimer's routing entry. The live claimer's messages still reached the server (handler bound to the socket), but every broadcast (roster, board relays, garbage) stopped arriving — a one-way desync. Fixed: the close handler only deletes the entry if it still belongs to this socket (`conns.get(conn.id) === conn`). E2E test: B2 claims, B3 claims, B2's socket dies, B3 accepts and still receives A's board relay. Failing before, passing after.
+- **Rejoin offer expiring on the disconnect clock** (class 3): the grace timer started at disconnect and was never restarted when the offer was issued, so a player who refreshed late in the grace and read the popup got silently pruned under it; clicking REJOIN then did nothing (accept path: `if (!entry) return`). Fixed: issuing the offer restarts the grace timer from the claim, giving the popup a full decision window (a claimer who never decides is still pruned after one full grace). E2E test: grace 200ms, refresh at 100ms, REJOIN at ~260ms (past the disconnect clock, inside the offer window) still rejoins. Failing before, passing after.
+
+Audited and found clean: match-lifecycle effects (onExit/targetMode refs are the only wipe sources — already fixed; remaining deps stable), iteration-while-mutation sites (registry.all() copies, sessionsByLobby splice sites copy-iterated, buffered has no loops, match/session clean), dismiss-vs-grace-expiry (pruneBuffered idempotent via buffered.get guard), disconnect at match_end (covered), round transition edges (intermission guard + game_start ordering covered by existing E2E).
+
+## Clear labels back + unified popup positioning
+
+- **Clear labels restored in multiplayer**: the SINGLE/DOUBLE/TRIPLE/TETRIS/T-SPIN/L-SPIN/PERFECT CLEAR popups were already wired in sprint/blitz, versus-AI, and zen, but MultiplayerGameScreen only had the send-number popups — the labels never rendered there. Added the ClearPopupRenderer wiring (settings.clearPopups) to the multiplayer game screen, matching the other modes.
+- **Send number now pops at the clear site**: the clear event carries the locking piece's column (`pieceX`), and `sendAnchor(rows, pieceX, cellSize)` places the popup just above the topmost cleared row, centered on the piece's column span — shared by all four screens so single-player and multiplayer anchor identically. Previously it drew at a fixed spot near the top of the canvas.
+- **Background glow removed** from the send-number popup: no radial gradient behind the number; the magnitude-scaled size/color, x[combo] tag (still color-cycling per combo step) and STREAK BROKEN tag remain.
+- Tests: sendAnchor math (top-row anchoring, left/right piece placement), the popup draws at the anchor with zero radial gradients, engine clear events carry pieceX (t-spin at x=0, l-spin at x=6 after kick). Suite 252/32 green.

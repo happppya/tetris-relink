@@ -127,7 +127,7 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
           }
           if (ev.type === 'clear') {
             if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
-            if (settings.fx.sendPopups) sendPopups.push(ev.attack, player.combo, now)
+            if (settings.fx.sendPopups) sendPopups.push(ev.attack, player.combo, now, ev.rows, ev.pieceX, CELL)
             fx.lineClear(ev.rows, CELL, ev.info, ev.attack, player.combo)
           }
           if (ev.type === 'lock' && frameHadHardDrop) {

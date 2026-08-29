@@ -7,7 +7,7 @@ import { net } from '../net/connection'
 import { MatchClient, type Intermission, type OpponentState } from '../net/match-client'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
 import { EffectsSystem } from '../render/effects'
-import { SendPopupRenderer } from '../render/cleartext'
+import { ClearPopupRenderer, SendPopupRenderer, clearLabels } from '../render/cleartext'
 import { GarbageMeter } from './GarbageMeter'
 import { StreakBox } from './StreakBox'
 import { formatNum } from './format'
@@ -217,6 +217,7 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
 
     const fx = new EffectsSystem(settings.fx)
     fx.setShakeEnabled(settings.shake)
+    const popups = new ClearPopupRenderer()
     const sendPopups = new SendPopupRenderer()
 
     const runner = new GameRunner({
@@ -232,7 +233,8 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
         const now = performance.now()
         for (const ev of events) {
           if (ev.type === 'clear') {
-            if (settings.fx.sendPopups) sendPopups.push(ev.attack, runner.game.combo, now)
+            if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
+            if (settings.fx.sendPopups) sendPopups.push(ev.attack, runner.game.combo, now, ev.rows, ev.pieceX, CELL)
             fx.lineClear(ev.rows, CELL, ev.info, ev.attack, runner.game.combo)
           }
         }
@@ -318,6 +320,7 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
         fx.update(dt / 1000)
         fx.draw(ctx)
         fx.drawOverlay(ctx, canvasRef.current.width, canvasRef.current.height, t)
+        if (settings.clearPopups) popups.draw(ctx, canvasRef.current.width, canvasRef.current.height, t)
         if (settings.fx.sendPopups) sendPopups.draw(ctx, canvasRef.current.width, canvasRef.current.height, t)
         fx.applyShake(canvasRef.current, t)
         const holdCtx = holdRef.current.getContext('2d')!

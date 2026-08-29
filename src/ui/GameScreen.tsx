@@ -70,7 +70,7 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
         for (const ev of events) {
           if (ev.type === 'clear') {
             if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
-            if (settings.fx.sendPopups) sendPopups.push(ev.attack, runner.game.combo, now)
+            if (settings.fx.sendPopups) sendPopups.push(ev.attack, runner.game.combo, now, ev.rows, ev.pieceX, CELL)
             fx.lineClear(ev.rows, CELL, ev.info, ev.attack, runner.game.combo)
           }
           if (ev.type === 'lock' && frameHadHardDrop) {

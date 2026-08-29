@@ -5,6 +5,12 @@ import { serializeBoard, type BoardCell } from '../shared/board.ts'
 export const AUTH_W = 10
 export const AUTH_H = 20
 
+// profiling: cumulative full-board serializations (the snapshot cross-check path)
+let serializations = 0
+export function authoritySerializations(): number {
+  return serializations
+}
+
 export interface QueuedGarbage {
   rows: number
   hole: number
@@ -20,6 +26,10 @@ export interface BoardAuthority {
   queue: QueuedGarbage[]
   /** four-wide mode: side columns walled, garbage holes clamped to the centre 4 */
   fourWide: boolean
+  /** cached serialized board (null = dirty, rebuilt on next serialize); the
+   * snapshot cross-check serializes every snapshot, so caching turns it into
+   * a string compare between mutations */
+  serialized: string | null
 }
 
 export interface LockPlacement {
@@ -44,16 +54,21 @@ export interface ApplyOutcome {
 }
 
 export function createAuthority(fourWide = false): BoardAuthority {
-  return { board: fourWide ? walledRows() : emptyRows(), queue: [], fourWide }
+  return { board: fourWide ? walledRows() : emptyRows(), queue: [], fourWide, serialized: null }
 }
 
 export function resetAuthority(a: BoardAuthority): void {
   a.board = a.fourWide ? walledRows() : emptyRows()
   a.queue = []
+  a.serialized = null
 }
 
 export function serializeAuthority(a: BoardAuthority): string {
-  return serializeBoard(a.board)
+  if (a.serialized === null) {
+    serializations++
+    a.serialized = serializeBoard(a.board)
+  }
+  return a.serialized
 }
 
 export function pendingGarbage(a: BoardAuthority): number {
@@ -113,6 +128,7 @@ function place(a: BoardAuthority, cells: LockPlacement['cells'], type: PieceType
   }
   for (const c of cells) if (a.board[c.y][c.x] !== null) return false
   for (const c of cells) a.board[c.y][c.x] = type ?? 'G'
+  a.serialized = null
   return true
 }
 
@@ -125,6 +141,7 @@ function clearFullRows(a: BoardAuthority): number {
     }
   }
   while (a.board.length < AUTH_H) a.board.unshift(a.fourWide ? walledRows()[0] : emptyRows()[0])
+  if (count > 0) a.serialized = null
   return count
 }
 
@@ -151,6 +168,7 @@ function applyQueued(a: BoardAuthority): number {
       a.board.push(row)
     }
   }
+  if (total > 0) a.serialized = null
   a.queue = []
   return total
 }

@@ -37,7 +37,7 @@ export type GameEvent =
   | { type: 'move' }
   | { type: 'rotate'; kickIndex: number }
   | { type: 'lock'; piece: ActivePiece; row: number }
-  | { type: 'clear'; info: ClearInfo; attack: AttackResult; scoreGained: number; rows: number[] }
+  | { type: 'clear'; info: ClearInfo; attack: AttackResult; scoreGained: number; rows: number[]; pieceX: number }
   | { type: 'hold'; piece: PieceType | null }
   | { type: 'garbage'; rows: number }
   | { type: 'attack'; lines: number }
@@ -527,7 +527,7 @@ export class Game {
       scoreGained = Math.round(scoreGained)
       this.score += scoreGained
 
-      events.push({ type: 'clear', info, attack, scoreGained, rows: fullRows })
+      events.push({ type: 'clear', info, attack, scoreGained, rows: fullRows, pieceX: piece.x })
     } else {
       this.combo = 0
       // non-clearing placements do not break the streak

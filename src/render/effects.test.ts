@@ -4,12 +4,17 @@ import {
   SendPopupRenderer,
   COMBO_GLOW,
   SEND_LIFE_MS,
+  sendAnchor,
 } from './cleartext'
 import { EffectsSystem, FX_PRESETS, effectsConfigFromLevel, presetFromConfig, type EffectsConfig } from './effects'
 import type { AttackResult } from '../engine/attack'
 
 function mockCtx() {
-  return {
+  const calls = {
+    radialGradients: 0,
+    fillText: [] as { text: string; x: number; y: number }[],
+  }
+  const ctx = {
     save: () => {},
     restore: () => {},
     textAlign: 'left' as CanvasTextAlign,
@@ -20,9 +25,13 @@ function mockCtx() {
     strokeStyle: '',
     fillRect: () => {},
     strokeText: () => {},
-    fillText: () => {},
-    createRadialGradient: () => ({ addColorStop: () => {} }),
+    fillText: (text: string, x: number, y: number) => calls.fillText.push({ text, x, y }),
+    createRadialGradient: () => {
+      calls.radialGradients++
+      return { addColorStop: () => {} }
+    },
   } as unknown as CanvasRenderingContext2D
+  return { ctx, calls }
 }
 
 function attack(totalLines: number, overrides: Partial<AttackResult> = {}): AttackResult {
@@ -60,44 +69,61 @@ describe('accumulateSend (combo send totals)', () => {
   })
 })
 
+const ROWS = [5]
+const PIECE_X = 4
+const CELL = 30
+
+describe('sendAnchor (popup position)', () => {
+  it('sits above the topmost cleared row, centered on the clearing piece', () => {
+    // row 5 -> canvas y (5 - HIDDEN_H=4) * 30 = 30, minus the 16px lift
+    expect(sendAnchor([5], 4, 30)).toEqual({ x: 180, y: 14 })
+    // multi-row clears anchor to the TOP row, not the middle
+    expect(sendAnchor([5, 6, 7], 4, 30).y).toBe(sendAnchor([5], 4, 30).y)
+    // piece at the left edge pulls the popup left of center
+    expect(sendAnchor([5], 0, 30).x).toBe(60)
+    // piece at the right edge pulls it right
+    expect(sendAnchor([5], 8, 30).x).toBe(300)
+  })
+})
+
 describe('SendPopupRenderer', () => {
   it('pops the raw send number on a lone clear', () => {
     const r = new SendPopupRenderer()
-    r.push(attack(2), 1, 0)
+    r.push(attack(2), 1, 0, ROWS, PIECE_X, CELL)
     expect(r.last).toEqual({ number: 2, combo: 1, streak: false })
-    r.push(attack(4), 1, 0)
+    r.push(attack(4), 1, 0, ROWS, PIECE_X, CELL)
     expect(r.last).toEqual({ number: 4, combo: 1, streak: false })
   })
 
   it('shows the cumulative total and an x-combo tag for combo sends', () => {
     const r = new SendPopupRenderer()
-    r.push(attack(2), 1, 0) // combo 1: 2
-    r.push(attack(2), 2, 100) // combo 2: 2+2 = 4
-    r.push(attack(6), 3, 200) // combo 3 after big multiplier: 4+6 = 10
+    r.push(attack(2), 1, 0, ROWS, PIECE_X, CELL) // combo 1: 2
+    r.push(attack(2), 2, 100, ROWS, PIECE_X, CELL) // combo 2: 2+2 = 4
+    r.push(attack(6), 3, 200, ROWS, PIECE_X, CELL) // combo 3 after big multiplier: 4+6 = 10
     expect(r.last).toEqual({ number: 10, combo: 3, streak: false })
   })
 
   it('marks a streak break on the popup', () => {
     const r = new SendPopupRenderer()
-    r.push(attack(2, { streakSent: true, streakBonus: 3, totalLines: 5 }), 1, 0)
+    r.push(attack(2, { streakSent: true, streakBonus: 3, totalLines: 5 }), 1, 0, ROWS, PIECE_X, CELL)
     expect(r.last).toEqual({ number: 5, combo: 1, streak: true })
   })
 
   it('does not pop when nothing was sent, but resets the chain on a fresh clear', () => {
     const r = new SendPopupRenderer()
-    r.push(attack(2), 1, 0)
-    r.push(attack(0), 2, 100) // combo continues but sends 0
+    r.push(attack(2), 1, 0, ROWS, PIECE_X, CELL)
+    r.push(attack(0), 2, 100, ROWS, PIECE_X, CELL) // combo continues but sends 0
     expect(r.active).toBe(1)
     expect(r.last?.number).toBe(2)
-    r.push(attack(3), 1, 200) // chain broke, fresh clear
+    r.push(attack(3), 1, 200, ROWS, PIECE_X, CELL) // chain broke, fresh clear
     expect(r.last?.number).toBe(3)
   })
 
   it('expires popups after their lifetime (draw filters by age)', () => {
     const r = new SendPopupRenderer()
-    r.push(attack(4), 1, 0)
-    r.push(attack(4), 2, 100)
-    const ctx = mockCtx()
+    r.push(attack(4), 1, 0, ROWS, PIECE_X, CELL)
+    r.push(attack(4), 2, 100, ROWS, PIECE_X, CELL)
+    const { ctx } = mockCtx()
     // a draw right after the push keeps them
     r.draw(ctx, 300, 600, 200)
     expect(r.active).toBe(2)
@@ -105,11 +131,22 @@ describe('SendPopupRenderer', () => {
     r.draw(ctx, 300, 600, SEND_LIFE_MS + 200)
     expect(r.active).toBe(0)
     // and the chain total resets for the next clear
-    r.push(attack(2), 1, SEND_LIFE_MS + 300)
+    r.push(attack(2), 1, SEND_LIFE_MS + 300, ROWS, PIECE_X, CELL)
     expect(r.last?.number).toBe(2)
   })
 
-  it('cycles the glow palette so successive combo attacks flash differently', () => {
+  it('draws the number at the clear anchor with no background glow', () => {
+    const r = new SendPopupRenderer()
+    r.push(attack(4), 1, 0, ROWS, PIECE_X, CELL)
+    const { ctx, calls } = mockCtx()
+    r.draw(ctx, 300, 600, 0)
+    // the number is drawn at the anchor (180, 14), not at a fixed screen spot
+    expect(calls.fillText.some((c) => c.text === '4' && c.x === 180 && c.y === 14)).toBe(true)
+    // the glow is gone: no radial gradients are ever created
+    expect(calls.radialGradients).toBe(0)
+  })
+
+  it('cycles the tag palette so successive combo attacks flash differently', () => {
     expect(COMBO_GLOW.length).toBeGreaterThanOrEqual(4)
     // distinct consecutive colors for at least the first four combo steps
     const firstFour = new Set(COMBO_GLOW.slice(0, 4))

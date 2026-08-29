@@ -708,6 +708,99 @@ describe('leave/disconnect races through the real stack', () => {
     await closeClient(a)
     await b2conn.close()
   })
+
+  it('a second refresh while a rejoin offer is pending keeps the live claimer fully routed', { timeout: 30000 }, async () => {
+    const { a, b, matchId } = await setupMatch()
+    const playerA = makePlayer(matchId, a.conn, a.store, ['I'])
+    makePlayer(matchId, b.conn, b.store, ['T'])
+    await settle()
+
+    // B's tab drops; the server buffers B for the grace period
+    await b.conn.close()
+    const oldBId = b.store.getState().selfId!
+    await waitFor(() => a.store.getState().lobby!.players.find((p) => p.id === oldBId)?.reconnecting === true, 'A sees B reconnecting')
+
+    // first refresh: B2 presents the old id and is offered the rejoin (popup)
+    const b2conn = new NetConnection()
+    const b2 = createLobbyStore(b2conn)
+    b2.getState().setName('B')
+    b2.setState({ selfId: oldBId })
+    b2.getState().connect(url)
+    await waitFor(() => b2.getState().pendingRejoin !== null, 'B2 offered the rejoin')
+
+    // second refresh before acting on the offer: B3 presents the same id
+    const b3conn = new NetConnection()
+    const b3 = createLobbyStore(b3conn)
+    const b3errors: string[] = []
+    b3conn.onMessage((msg) => {
+      if (msg.type === 'error' && msg.code !== 'host_transferred' && msg.code !== 'connection_lost') b3errors.push(msg.message)
+    })
+    b3.getState().setName('B')
+    b3.setState({ selfId: oldBId })
+    b3.getState().connect(url)
+    await waitFor(() => b3.getState().pendingRejoin !== null, 'B3 offered the rejoin')
+
+    // the stale first claimer's socket dies: its close must NOT yank the live
+    // claimer's routing entry, or B3 silently stops receiving every broadcast
+    // (roster updates, opponent board relays, garbage) while its own messages
+    // still reach the server — a one-way desync
+    await b2conn.close()
+
+    // B3 accepts the rejoin and the match must keep flowing to it
+    b3.getState().rejoinGame()
+    await waitFor(() => b3.getState().lobby !== null && b3.getState().match !== null, 'B3 rejoined the match')
+    expect(b3.getState().match!.matchId).toBe(matchId)
+    await waitFor(() => a.store.getState().lobby!.players.find((p) => p.id === oldBId)?.reconnecting === false, 'reconnecting cleared')
+
+    // A places a piece: its board relay (routed through B3's conn entry) must reach B3
+    const playerB3 = makePlayer(matchId, b3conn, b3, ['T'])
+    await settle(200)
+    tick(playerA, ['hardDrop'])
+    tick(playerA, [], 0, 30)
+    await waitFor(() => playerB3.client.getState().opponents[a.store.getState().selfId!]?.board.length === 20, 'B3 sees A board relay')
+    expect(b3errors).toHaveLength(0)
+
+    await closeClient(a)
+    if (b3.getState().lobby || b3.getState().match) b3.getState().leaveLobby()
+    await settle(50)
+    await b3conn.close()
+  })
+
+  it('a rejoin offer is still actionable after the original disconnect grace expires', { timeout: 30000 }, async () => {
+    const prev = setReconnectGraceMs(200)
+    try {
+      const { a, b, matchId } = await setupMatch()
+      await settle()
+
+      await b.conn.close()
+      const oldBId = b.store.getState().selfId!
+      await waitFor(() => a.store.getState().lobby!.players.find((p) => p.id === oldBId)?.reconnecting === true, 'A sees B reconnecting')
+
+      // the refresh lands late in the grace window (100ms of the 200ms gone)
+      await settle(100)
+      const b2conn = new NetConnection()
+      const b2 = createLobbyStore(b2conn)
+      b2.getState().setName('B')
+      b2.setState({ selfId: oldBId })
+      b2.getState().connect(url)
+      await waitFor(() => b2.getState().pendingRejoin !== null, 'B2 offered the rejoin')
+
+      // wait past the disconnect-based grace: the popup is still up and the
+      // offer must give the player its own full window to decide, so REJOIN
+      // still works instead of silently doing nothing
+      await settle(160)
+      b2.getState().rejoinGame()
+      await waitFor(() => b2.getState().lobby !== null && b2.getState().match !== null, 'B2 rejoined after the original grace')
+      expect(b2.getState().match!.matchId).toBe(matchId)
+
+      await closeClient(a)
+      if (b2.getState().lobby || b2.getState().match) b2.getState().leaveLobby()
+      await settle(50)
+      await b2conn.close()
+    } finally {
+      setReconnectGraceMs(prev)
+    }
+  })
 })
 
 describe('spectating and AFK through the real stack', () => {

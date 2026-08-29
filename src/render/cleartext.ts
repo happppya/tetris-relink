@@ -1,4 +1,5 @@
 import type { ClearInfo, AttackResult } from '../engine/attack'
+import { HIDDEN_H } from '../engine/types'
 
 const CLEAR_NAMES = ['SINGLE', 'DOUBLE', 'TRIPLE', 'TETRIS']
 
@@ -70,11 +71,14 @@ export interface SendPopup {
   combo: number
   streak: boolean
   bornAt: number
+  /** canvas position (popup rises from here as it ages) */
+  x: number
+  y: number
 }
 
 export const SEND_LIFE_MS = 1150
 
-/** Glow palette cycled per combo step so each successive combo attack flashes a new color. */
+/** Tag palette cycled per combo step so each successive combo attack flashes a new color. */
 export const COMBO_GLOW = ['#8fd7ff', '#ffd966', '#7dffa8', '#cfa6ff', '#ff9a9a', '#ffb347']
 
 /**
@@ -86,25 +90,30 @@ export function accumulateSend(prev: number, attack: AttackResult, combo: number
   return prev + attack.totalLines
 }
 
-function hexWithAlpha(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+/**
+ * Canvas anchor for a send popup: just above the topmost cleared row, centered
+ * on the column span of the piece that cleared it. Shared by every game mode so
+ * single-player and multiplayer pop exactly the same way.
+ */
+export function sendAnchor(rows: number[], pieceX: number, cellSize: number): { x: number; y: number } {
+  let minRow = Infinity
+  for (const r of rows) if (r < minRow) minRow = r
+  return { x: (pieceX + 2) * cellSize, y: (minRow - HIDDEN_H) * cellSize - 16 }
 }
 
 export class SendPopupRenderer {
   private popups: SendPopup[] = []
   private comboTotal = 0
 
-  push(attack: AttackResult, combo: number, now: number) {
+  push(attack: AttackResult, combo: number, now: number, rows: number[], pieceX: number, cellSize: number) {
     if (attack.totalLines <= 0) {
       // nothing was sent by this clear; still reset the chain total if it broke
       if (combo <= 1) this.comboTotal = 0
       return
     }
     this.comboTotal = accumulateSend(this.comboTotal, attack, combo)
-    this.popups.push({ number: this.comboTotal, combo, streak: attack.streakSent, bornAt: now })
+    const { x, y } = sendAnchor(rows, pieceX, cellSize)
+    this.popups.push({ number: this.comboTotal, combo, streak: attack.streakSent, bornAt: now, x, y })
   }
 
   /** Most recently pushed popup (tests / debugging). */
@@ -122,7 +131,7 @@ export class SendPopupRenderer {
     this.comboTotal = 0
   }
 
-  draw(ctx: CanvasRenderingContext2D, w: number, h: number, now: number) {
+  draw(ctx: CanvasRenderingContext2D, _w: number, _h: number, now: number) {
     if (!this.popups.length) return
     this.popups = this.popups.filter((p) => now - p.bornAt < SEND_LIFE_MS)
     if (!this.popups.length) return
@@ -137,22 +146,13 @@ export class SendPopupRenderer {
       const pop = Math.max(0, 1 - age * 10)
       const n = p.number
       const size = (46 + Math.min(n, 24) * 1.6) * (1 + pop * 0.55)
-      const x = w / 2
-      const y = h * 0.24 - age * 34 + i * 4
+      const x = p.x
+      const y = p.y - age * 34
 
       // magnitude-scaled text color: bigger sends burn hotter
       const textColor = n >= 16 ? '#ff8a5c' : n >= 10 ? '#ffd966' : n >= 6 ? '#fff3c4' : '#ffffff'
-      // glow cycles per combo step so long combo chains flash different colors
+      // tag color cycles per combo step so long combo chains flash differently
       const glow = COMBO_GLOW[Math.max(0, p.combo - 1) % COMBO_GLOW.length]
-
-      // soft radial glow behind the number, sized by magnitude
-      const glowR = size * (0.95 + Math.min(n, 16) * 0.05)
-      const grad = ctx.createRadialGradient(x, y, size * 0.15, x, y, glowR)
-      grad.addColorStop(0, hexWithAlpha(glow, 0.5))
-      grad.addColorStop(1, hexWithAlpha(glow, 0))
-      ctx.globalAlpha = alpha * 0.85
-      ctx.fillStyle = grad
-      ctx.fillRect(x - glowR, y - glowR * 1.35, glowR * 2, glowR * 2.7)
 
       ctx.globalAlpha = alpha
       ctx.font = `bold ${Math.round(size)}px ui-monospace, monospace`
