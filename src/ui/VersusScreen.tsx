@@ -7,7 +7,7 @@ import { useSettings, handlingFromSettings } from '../state/settings'
 import { useStats } from '../state/stats'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
 import { EffectsSystem } from '../render/effects'
-import { ClearPopupRenderer, clearLabels } from '../render/cleartext'
+import { ClearPopupRenderer, SendPopupRenderer, clearLabels } from '../render/cleartext'
 import type { GameEvent } from '../engine/game'
 import { formatTime, formatNum } from './format'
 import { StreakBox } from './StreakBox'
@@ -106,10 +106,11 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
     let aiAcc = 0
     let basePps = settings.ai.pps
     let livePps = settings.ai.pps
-    const fx = new EffectsSystem(settings.effectsLevel)
+    const fx = new EffectsSystem(settings.fx)
     fx.setShakeEnabled(settings.shake)
     let frameHadHardDrop = false
     const popups = new ClearPopupRenderer()
+    const sendPopups = new SendPopupRenderer()
 
     const playerRunner = new GameRunner({
       mode: 'versus',
@@ -126,7 +127,8 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
           }
           if (ev.type === 'clear') {
             if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
-            fx.lineClear(ev.rows, CELL, ev.info, player.combo)
+            if (settings.fx.sendPopups) sendPopups.push(ev.attack, player.combo, now)
+            fx.lineClear(ev.rows, CELL, ev.info, ev.attack, player.combo)
           }
           if (ev.type === 'lock' && frameHadHardDrop) {
             fx.hardDropImpact(ev.piece, CELL)
@@ -233,6 +235,9 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
 
       if (settings.clearPopups) {
         popups.draw(pCtx, pCtx.canvas.width, pCtx.canvas.height, t)
+      }
+      if (settings.fx.sendPopups) {
+        sendPopups.draw(pCtx, pCtx.canvas.width, pCtx.canvas.height, t)
       }
 
       fx.applyShake(playerCanvasRef.current!, t)

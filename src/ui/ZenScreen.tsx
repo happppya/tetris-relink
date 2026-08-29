@@ -6,7 +6,7 @@ import { useSettings, handlingFromSettings } from '../state/settings'
 import { useZen, zenLevelInfo, type GarbageMode, type GarbageMultiplier } from '../state/zen'
 import { renderBoard, drawMiniPiece, PIECE_COLORS } from '../render/canvas'
 import { EffectsSystem } from '../render/effects'
-import { ClearPopupRenderer, clearLabels } from '../render/cleartext'
+import { ClearPopupRenderer, SendPopupRenderer, clearLabels } from '../render/cleartext'
 import { cellsFor } from '../engine/pieces'
 import { HIDDEN_H, type Cell } from '../engine/types'
 import { bumpiness, columnHeights, countHoles } from '../engine/stackstats'
@@ -108,10 +108,11 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
     let done = false
     let lastHudUpdate = 0
     let contributed = 0
-    const fx = new EffectsSystem(settings.effectsLevel)
+    const fx = new EffectsSystem(settings.fx)
     fx.setShakeEnabled(settings.shake)
     let frameHadHardDrop = false
     const popups = new ClearPopupRenderer()
+    const sendPopups = new SendPopupRenderer()
     const hintProvider = new HintProvider()
 
     let hintPlacements: BotHintPlacement[] = []
@@ -142,7 +143,8 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
         for (const ev of events) {
           if (ev.type === 'clear') {
             if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
-            fx.lineClear(ev.rows, CELL, ev.info, runner.game.combo)
+            if (settings.fx.sendPopups) sendPopups.push(ev.attack, runner.game.combo, now)
+            fx.lineClear(ev.rows, CELL, ev.info, ev.attack, runner.game.combo)
             if (zenRef.current.garbage === 'backfire') {
               runner.game.receiveGarbage(Math.round(ev.attack.totalLines * zenRef.current.multiplier), true)
             } else if (zenRef.current.garbage === 'unclear') {
@@ -321,6 +323,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
       fx.draw(ctx)
       fx.drawOverlay(ctx, canvas.width, canvas.height, t)
       if (settings.clearPopups) popups.draw(ctx, canvas.width, canvas.height, t)
+      if (settings.fx.sendPopups) sendPopups.draw(ctx, canvas.width, canvas.height, t)
 
       if (assistActiveRef.current && zenRef.current.assist && !pausedLocal && !done) {
         const g = runner.game

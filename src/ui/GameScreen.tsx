@@ -5,7 +5,7 @@ import { useSettings, handlingFromSettings } from '../state/settings'
 import { useStats } from '../state/stats'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
 import { EffectsSystem } from '../render/effects'
-import { ClearPopupRenderer, clearLabels } from '../render/cleartext'
+import { ClearPopupRenderer, SendPopupRenderer, clearLabels } from '../render/cleartext'
 import type { GameEvent } from '../engine/game'
 import { formatTime, formatNum } from './format'
 import { StreakBox } from './StreakBox'
@@ -49,10 +49,11 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
 
     let pausedLocal = false
     let done = false
-    const fx = new EffectsSystem(settings.effectsLevel)
+    const fx = new EffectsSystem(settings.fx)
     fx.setShakeEnabled(settings.shake)
     let frameHadHardDrop = false
     const popups = new ClearPopupRenderer()
+    const sendPopups = new SendPopupRenderer()
     let lastHudUpdate = 0
 
     const runner = new GameRunner({
@@ -69,7 +70,8 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
         for (const ev of events) {
           if (ev.type === 'clear') {
             if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
-            fx.lineClear(ev.rows, CELL, ev.info, runner.game.combo)
+            if (settings.fx.sendPopups) sendPopups.push(ev.attack, runner.game.combo, now)
+            fx.lineClear(ev.rows, CELL, ev.info, ev.attack, runner.game.combo)
           }
           if (ev.type === 'lock' && frameHadHardDrop) {
             fx.hardDropImpact(ev.piece, CELL)
@@ -131,6 +133,9 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
 
       if (settings.clearPopups) {
         popups.draw(ctx, canvas.width, canvas.height, t)
+      }
+      if (settings.fx.sendPopups) {
+        sendPopups.draw(ctx, canvas.width, canvas.height, t)
       }
 
       fx.applyShake(canvas, t)

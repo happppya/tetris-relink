@@ -119,3 +119,19 @@ Status legend: [ ] todo · [~] in progress · [x] done
 
 - [x] **Intermission shows after every round** — root cause: `MultiplayerGameScreen`'s match effect listed `onExit` in its deps, and `onExit` is a fresh closure on every App render; any `roster_update` during the match (joins/leaves/spectate, and previously the per-round +1 broadcast) re-rendered App, which tore down and rebuilt the MatchClient mid-match — wiping the intermission state a frame after `game_end` set it, so the scoreboard only ever survived on `match_end` (which re-sets it on the fresh client). Fix: `onExit` is read via a ref and removed from the effect deps (same pattern as the earlier `targetMode` fix). Proven by a new E2E test: a round ending mid-match opens the intermission on both clients with the round's scores, and the match continues to round 2.
 - [x] **Game score = +1 for the match winner only** — the award moved from `game_won` (per round) to `match_won`: the series winner gets exactly +1 on their lobby member, others get nothing, and no roster broadcast fires per round anymore (which also removes the App-re-render trigger at round end). E2E: mid-match the roster stays 0/0; after a 3-0 match the winner is at 1 and the loser at 0.
+
+## Send-line VFX + effects presets
+
+- Number popup VFX (`SendPopupRenderer` in render/cleartext.ts): big number = total lines sent by the current combo chain (lone triple pops "2", tetris pops "4", combo continuations show current send + all previous sends after the combo multiplier). Size/color/life scale with the number; glow color cycles per combo step so long combos flash differently; small `x[combo]` tag on combo sends; `STREAK BROKEN` tag on streak breaks.
+- EffectsSystem is now config-driven (`EffectsConfig` per-parameter: particles/rings/rowFlash/beams/screenFlash/impact/sendPopups) with presets MINIMAL/MEDIUM/HIGH/ULTRA, HIGH default; old 1-5 effectsLevel migrates onto the closest preset. Boost now scales by lines actually sent, not clear type.
+- Wired through GameScreen, VersusScreen, ZenScreen and the multiplayer local board; settings UI replaced with preset buttons + individual parameter controls (custom configs detected).
+- 13 new unit tests (send accumulation, popup fields/expiry, preset configs, legacy level mapping, preset round-trip).
+
+## Combo multiplier exact formula + settings UI
+
+- Attack combo is now exactly `base * (1 + 0.25 * combo)` (floored, no cap) — larger bases gain more absolute lines per combo step. Zero-base attacks use `floor(ln(1 + 1.25 * combo))` from the 2-combo on (x=2 → 1 line, x=6 → 2, x=16 → 3). Removed `comboStep`/`comboMaxMult` from AttackConfig (the old cap is gone); applies identically on client and server (shared computeAttack, lock.combo carries x).
+- Settings: "ATTACK TABLE (VERSUS)" renamed "GAME PARAMETERS" and is now read-only (static values + formula note, no reset button). Hover tooltips added to every settings option (handling, keybinds, gameplay, visual effects, AI, game parameters, settings file) explaining what each does.
+
+## Handling presets (NOOB / PRO)
+
+- New HANDLING presets in settings: NOOB (default; DAS 133 / ARR 33 / SDD 33, same as defaults) and PRO (DAS 80 / ARR 0 / SDD 0 — instant slides and soft drops). Buttons apply the full profile; active preset is auto-detected from current values (custom configs show "custom — tweak the sliders below"). Defaults derive from the noob preset constant so they can't drift.

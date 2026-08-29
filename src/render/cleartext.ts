@@ -1,4 +1,4 @@
-import type { ClearInfo } from '../engine/attack'
+import type { ClearInfo, AttackResult } from '../engine/attack'
 
 const CLEAR_NAMES = ['SINGLE', 'DOUBLE', 'TRIPLE', 'TETRIS']
 
@@ -49,6 +49,137 @@ export class ClearPopupRenderer {
       ctx.strokeText(text, x, y)
       ctx.fillStyle = text === 'PERFECT CLEAR' ? '#ffffff' : '#e5e5e5'
       ctx.fillText(text, x, y)
+    }
+    ctx.restore()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Send-line number popups
+//
+// The big number is the TOTAL LINES SENT by the current combo chain: a lone
+// triple pops "2", a tetris pops "4", and a combo continuation shows the sum
+// of every send in the chain (the current combo-multiplied send plus all the
+// ones before it). Its size/color/life scale with the number so a triple sent
+// after a big combo multiplier pops harder than a plain tetris; the glow color
+// cycles between successive combo attacks so long chains flash differently.
+// ---------------------------------------------------------------------------
+
+export interface SendPopup {
+  number: number
+  combo: number
+  streak: boolean
+  bornAt: number
+}
+
+export const SEND_LIFE_MS = 1150
+
+/** Glow palette cycled per combo step so each successive combo attack flashes a new color. */
+export const COMBO_GLOW = ['#8fd7ff', '#ffd966', '#7dffa8', '#cfa6ff', '#ff9a9a', '#ffb347']
+
+/**
+ * Running send total for the current combo chain. `combo` is the post-clear
+ * combo count (1 = first clear of the chain, 2+ = continuation).
+ */
+export function accumulateSend(prev: number, attack: AttackResult, combo: number): number {
+  if (combo <= 1) return attack.totalLines
+  return prev + attack.totalLines
+}
+
+function hexWithAlpha(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+export class SendPopupRenderer {
+  private popups: SendPopup[] = []
+  private comboTotal = 0
+
+  push(attack: AttackResult, combo: number, now: number) {
+    if (attack.totalLines <= 0) {
+      // nothing was sent by this clear; still reset the chain total if it broke
+      if (combo <= 1) this.comboTotal = 0
+      return
+    }
+    this.comboTotal = accumulateSend(this.comboTotal, attack, combo)
+    this.popups.push({ number: this.comboTotal, combo, streak: attack.streakSent, bornAt: now })
+  }
+
+  /** Most recently pushed popup (tests / debugging). */
+  get last(): { number: number; combo: number; streak: boolean } | null {
+    const p = this.popups[this.popups.length - 1]
+    return p ? { number: p.number, combo: p.combo, streak: p.streak } : null
+  }
+
+  get active(): number {
+    return this.popups.length
+  }
+
+  clear() {
+    this.popups = []
+    this.comboTotal = 0
+  }
+
+  draw(ctx: CanvasRenderingContext2D, w: number, h: number, now: number) {
+    if (!this.popups.length) return
+    this.popups = this.popups.filter((p) => now - p.bornAt < SEND_LIFE_MS)
+    if (!this.popups.length) return
+    ctx.save()
+    ctx.textAlign = 'center'
+    // newest popup on top
+    for (let i = this.popups.length - 1; i >= 0; i--) {
+      const p = this.popups[i]
+      const age = (now - p.bornAt) / SEND_LIFE_MS
+      if (age >= 1) continue
+      const alpha = age < 0.7 ? 1 : 1 - (age - 0.7) / 0.3
+      const pop = Math.max(0, 1 - age * 10)
+      const n = p.number
+      const size = (46 + Math.min(n, 24) * 1.6) * (1 + pop * 0.55)
+      const x = w / 2
+      const y = h * 0.24 - age * 34 + i * 4
+
+      // magnitude-scaled text color: bigger sends burn hotter
+      const textColor = n >= 16 ? '#ff8a5c' : n >= 10 ? '#ffd966' : n >= 6 ? '#fff3c4' : '#ffffff'
+      // glow cycles per combo step so long combo chains flash different colors
+      const glow = COMBO_GLOW[Math.max(0, p.combo - 1) % COMBO_GLOW.length]
+
+      // soft radial glow behind the number, sized by magnitude
+      const glowR = size * (0.95 + Math.min(n, 16) * 0.05)
+      const grad = ctx.createRadialGradient(x, y, size * 0.15, x, y, glowR)
+      grad.addColorStop(0, hexWithAlpha(glow, 0.5))
+      grad.addColorStop(1, hexWithAlpha(glow, 0))
+      ctx.globalAlpha = alpha * 0.85
+      ctx.fillStyle = grad
+      ctx.fillRect(x - glowR, y - glowR * 1.35, glowR * 2, glowR * 2.7)
+
+      ctx.globalAlpha = alpha
+      ctx.font = `bold ${Math.round(size)}px ui-monospace, monospace`
+      ctx.lineWidth = Math.max(4, size * 0.12)
+      ctx.strokeStyle = '#000000'
+      ctx.strokeText(String(n), x, y)
+      ctx.fillStyle = textColor
+      ctx.fillText(String(n), x, y)
+
+      // small x[combo] tag on combo sends (x2, x3, ...)
+      if (p.combo >= 2) {
+        const tagSize = Math.max(13, size * 0.34)
+        ctx.font = `bold ${Math.round(tagSize)}px ui-monospace, monospace`
+        ctx.lineWidth = 3
+        ctx.strokeText(`x${p.combo}`, x, y + size * 0.42)
+        ctx.fillStyle = glow
+        ctx.fillText(`x${p.combo}`, x, y + size * 0.42)
+      }
+      if (p.streak) {
+        const tagSize = Math.max(12, size * 0.3)
+        ctx.font = `bold ${Math.round(tagSize)}px ui-monospace, monospace`
+        const ty = y + size * 0.42 + (p.combo >= 2 ? tagSize * 1.15 : 0)
+        ctx.lineWidth = 3
+        ctx.strokeText('STREAK BROKEN', x, ty)
+        ctx.fillStyle = '#ff9a8a'
+        ctx.fillText('STREAK BROKEN', x, ty)
+      }
     }
     ctx.restore()
   }

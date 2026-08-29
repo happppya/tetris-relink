@@ -5,6 +5,7 @@ import type { HandlingConfig } from '../engine/game'
 import { DEFAULT_ATTACK, type AttackConfig } from '../engine/attack'
 import { DEFAULT_SCORING, type ScoringConfig } from '../engine/scoring'
 import { BOT_PROFILES } from '../ai/profiles'
+import { FX_PRESETS, effectsConfigFromLevel, type EffectsConfig, type FxPreset } from '../render/effects'
 
 export interface AiSettings {
   mode: 'fixed' | 'adaptive'
@@ -17,8 +18,10 @@ export interface Settings {
   sddMs: number
   keybinds: Record<InputAction, string>
   ghost: boolean
-  /** visual effects intensity, see EFFECT_LEVELS in render/effects.ts */
-  effectsLevel: number
+  /** active visual-effects preset (see FX_PRESETS in render/effects.ts) */
+  fxPreset: FxPreset
+  /** per-parameter effects config; presets set all of these at once */
+  fx: EffectsConfig
   shake: boolean
   clearPopups: boolean
   startLevel: number
@@ -32,6 +35,32 @@ export interface Settings {
 export const FRAMES_PER_MS = 60 / 1000
 
 export const msToFrames = (ms: number) => Math.max(0, Math.round(ms * FRAMES_PER_MS))
+
+export interface HandlingPresetValues {
+  dasMs: number
+  arrMs: number
+  sddMs: number
+}
+
+export type HandlingPreset = 'noob' | 'pro'
+
+/**
+ * Handling presets: NOOB is the beginner-friendly default, PRO is competitive
+ * (80ms DAS, instant slides, instant soft drops).
+ */
+export const HANDLING_PRESETS: Record<HandlingPreset, HandlingPresetValues> = {
+  noob: { dasMs: 133, arrMs: 33, sddMs: 33 },
+  pro: { dasMs: 80, arrMs: 0, sddMs: 0 },
+}
+
+/** Returns the preset matching the current values, or null when customized. */
+export function handlingPresetFromValues(values: HandlingPresetValues): HandlingPreset | null {
+  for (const p of Object.keys(HANDLING_PRESETS) as HandlingPreset[]) {
+    const v = HANDLING_PRESETS[p]
+    if (values.dasMs === v.dasMs && values.arrMs === v.arrMs && values.sddMs === v.sddMs) return p
+  }
+  return null
+}
 
 /** Maps DAS/ARR/SDF timings (ms) to the 60Hz frame counts the engine expects. */
 export function handlingFromSettings(s: Pick<Settings, 'dasMs' | 'arrMs' | 'sddMs'>): HandlingConfig {
@@ -71,12 +100,13 @@ const DEFAULT_KEYBINDS: Record<InputAction, string> = {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  dasMs: 133,
-  arrMs: 33,
-  sddMs: 33,
+  dasMs: HANDLING_PRESETS.noob.dasMs,
+  arrMs: HANDLING_PRESETS.noob.arrMs,
+  sddMs: HANDLING_PRESETS.noob.sddMs,
   keybinds: { ...DEFAULT_KEYBINDS },
   ghost: true,
-  effectsLevel: 2,
+  fxPreset: 'high',
+  fx: FX_PRESETS.high,
   shake: false,
   clearPopups: true,
   startLevel: 1,
@@ -93,6 +123,7 @@ const cloneDefaults = (): Settings => ({
   attack: { ...DEFAULT_SETTINGS.attack },
   scoring: { ...DEFAULT_SETTINGS.scoring },
   ai: { ...DEFAULT_SETTINGS.ai },
+  fx: { ...DEFAULT_SETTINGS.fx },
 })
 
 const SETTINGS_KEYS = [
@@ -101,7 +132,8 @@ const SETTINGS_KEYS = [
   'sddMs',
   'keybinds',
   'ghost',
-  'effectsLevel',
+  'fxPreset',
+  'fx',
   'shake',
   'clearPopups',
   'startLevel',
@@ -140,9 +172,23 @@ export function parseSettings(raw: unknown): Settings | null {
   out.sddMs = clampNum(r.sddMs, 0, 1000, out.sddMs)
   out.startLevel = clampNum(r.startLevel, 1, 19, out.startLevel)
   if (typeof r.ghost === 'boolean') out.ghost = r.ghost
-  out.effectsLevel = clampNum(r.effectsLevel, 1, 5, out.effectsLevel)
-  // legacy pre-levels setting
-  if (r.effectsLevel === undefined && r.particles === false) out.effectsLevel = 1
+  if (typeof r.fxPreset === 'string' && r.fxPreset in FX_PRESETS) out.fxPreset = r.fxPreset as FxPreset
+  // legacy 1-5 effects level: map onto the closest preset
+  const legacyLevel = clampNum(r.effectsLevel, 1, 5, -1)
+  if (legacyLevel >= 1) {
+    out.fxPreset = legacyLevel <= 1 ? 'minimal' : legacyLevel === 2 ? 'medium' : legacyLevel <= 4 ? 'high' : 'ultra'
+    out.fx = effectsConfigFromLevel(legacyLevel)
+  }
+  if (typeof r.fx === 'object' && r.fx !== null) {
+    const f = r.fx as Record<string, unknown>
+    out.fx.particles = clampNum(f.particles, 0, 2, out.fx.particles)
+    out.fx.rings = clampNum(f.rings, 0, 2, out.fx.rings)
+    out.fx.rowFlash = clampNum(f.rowFlash, 0, 2, out.fx.rowFlash)
+    if (typeof f.beams === 'boolean') out.fx.beams = f.beams
+    if (typeof f.screenFlash === 'boolean') out.fx.screenFlash = f.screenFlash
+    if (typeof f.impact === 'boolean') out.fx.impact = f.impact
+    if (typeof f.sendPopups === 'boolean') out.fx.sendPopups = f.sendPopups
+  }
   if (typeof r.shake === 'boolean') out.shake = r.shake
   if (typeof r.clearPopups === 'boolean') out.clearPopups = r.clearPopups
   if (typeof r.keybinds === 'object' && r.keybinds !== null) {
@@ -170,6 +216,8 @@ interface SettingsStore extends Settings {
   updateAttack: (patch: Partial<AttackConfig>) => void
   updateScoring: (patch: Partial<ScoringConfig>) => void
   updateAi: (patch: Partial<AiSettings>) => void
+  setFxPreset: (preset: FxPreset) => void
+  updateFx: (patch: Partial<EffectsConfig>) => void
   bindKey: (action: InputAction, code: string) => void
   resetKeybinds: () => void
   resetHandling: () => void
@@ -206,9 +254,12 @@ export const useSettings = create<SettingsStore>()(
           sddMs: DEFAULT_SETTINGS.sddMs,
         }),
       resetGameplay: () => set({ ghost: DEFAULT_SETTINGS.ghost, startLevel: DEFAULT_SETTINGS.startLevel }),
+      setFxPreset: (preset) => set({ fxPreset: preset, fx: { ...FX_PRESETS[preset] } }),
+      updateFx: (patch) => set((s) => ({ fx: { ...s.fx, ...patch } })),
       resetVisuals: () =>
         set({
-          effectsLevel: DEFAULT_SETTINGS.effectsLevel,
+          fxPreset: DEFAULT_SETTINGS.fxPreset,
+          fx: { ...DEFAULT_SETTINGS.fx },
           shake: DEFAULT_SETTINGS.shake,
           clearPopups: DEFAULT_SETTINGS.clearPopups,
         }),
@@ -229,9 +280,9 @@ export const useSettings = create<SettingsStore>()(
     }),
     {
       name: 'tetris-liberation-settings',
-      version: 3,
+      version: 4,
       migrate: (state) => {
-        const s = (state ?? {}) as Partial<Settings>
+        const s = (state ?? {}) as Partial<Settings> & Record<string, unknown>
         const merged = {
           ...cloneDefaults(),
           ...s,
@@ -239,9 +290,16 @@ export const useSettings = create<SettingsStore>()(
           scoring: { ...DEFAULT_SCORING },
           keybinds: { ...cloneDefaults().keybinds, ...(s.keybinds ?? {}) },
           ai: { ...cloneDefaults().ai, ...(s.ai ?? {}) },
+          fx: { ...cloneDefaults().fx, ...(s.fx ?? {}) },
         }
-        if (typeof s.effectsLevel !== 'number') {
-          merged.effectsLevel = (s as Record<string, unknown>).particles === false ? 1 : DEFAULT_SETTINGS.effectsLevel
+        // legacy 1-5 effects level -> closest preset (old default was 2 = classic)
+        if (typeof s.effectsLevel === 'number') {
+          const level = s.effectsLevel
+          merged.fxPreset = level <= 1 ? 'minimal' : level === 2 ? 'medium' : level <= 4 ? 'high' : 'ultra'
+          merged.fx = effectsConfigFromLevel(level)
+        } else if (s.particles === false) {
+          merged.fxPreset = 'minimal'
+          merged.fx = FX_PRESETS.minimal
         }
         return merged
       },

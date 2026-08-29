@@ -57,7 +57,7 @@ src/
 2. The game loop is a single `requestAnimationFrame` driving a fixed-timestep accumulator; it calls `game.tick()` and hands the result to the renderer.
 3. React never re-renders per frame. HUD values are pushed via subscriptions at a throttled rate or refs. Game screens throttle `setHud`-style updates with a `lastHudUpdate > 100` guard — never update React state from the inner loop.
 4. Settings changes take effect immediately in the running engine where possible (DAS/ARR/SDF/keybinds).
-5. Particles/effects live behind the global effects-level setting (`EFFECT_LEVELS` 1-5 in `render/effects.ts`); level 1 disables them entirely and must not change gameplay behavior.
+5. Particles/effects live behind the per-parameter effects config (`EffectsConfig` in `render/effects.ts`) with presets MINIMAL/MEDIUM/HIGH/ULTRA (default HIGH); each parameter can be tweaked individually and effects must never change gameplay behavior.
 
 ## Simulation & input
 

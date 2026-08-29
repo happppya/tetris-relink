@@ -150,7 +150,9 @@ describe('APM tracking', () => {
 })
 
 describe('Streak mechanic', () => {
-  const ISOLATE = { comboStep: 0, b2bBonus: 0 }
+  // comboStep was removed from the attack table: combos now always scale as
+  // base * (1 + 0.25 * combo). ISOLATE only zeroes the flat b2b bonus.
+  const ISOLATE = { b2bBonus: 0 }
 
   function setupTetrisGap(game: Game) {
     for (let y = TOTAL_H - 4; y < TOTAL_H; y++)
@@ -185,32 +187,38 @@ describe('Streak mechanic', () => {
     expect(game.sentLines).toBe(sentBefore)
   })
 
-  it('sends nothing when a plain clear breaks the streak at or below the threshold', () => {
+  it('a plain clear at the streak threshold sends no streak bonus (only the combo ln send)', () => {
     const game = new Game({ seed: 1, attack: { ...ISOLATE, streakThreshold: 3 }, sendsGarbage: true })
     for (let i = 0; i < 3; i++) dropTetris(game)
     expect(game.streak).toBe(3)
+    // each tetris is also a perfect clear (base 10): combo x=0,1,2 → 10 + 12 + 15
     const sentBefore = game.sentLines
+    expect(sentBefore).toBe(37)
 
     for (let x = 0; x < BOARD_W; x++) if (x !== 7) game.board[TOTAL_H - 1][x] = 'J'
     game.active = { type: 'I', rot: 1, x: 5, y: 3 }
     game.tick({ dir: 0, softDrop: false, actions: ['hardDrop'] })
     expect(game.streak).toBe(0)
-    expect(game.sentLines).toBe(sentBefore)
+    // single (base 0) at combo x=3: floor(ln(4.75)) = 1, no streak bonus at threshold
+    expect(game.sentLines).toBe(sentBefore + 1)
   })
 
   it('sends streak length when broken by a plain clear above threshold', () => {
     const game = new Game({ seed: 1, attack: ISOLATE, sendsGarbage: true })
     for (let i = 0; i < 4; i++) dropTetris(game)
     expect(game.streak).toBe(4)
+    // each tetris is also a perfect clear (base 10): combo x=0..3 → 10 + 12 + 15 + 17
     const sentBefore = game.sentLines
+    expect(sentBefore).toBe(54)
 
     for (let x = 0; x < BOARD_W; x++) if (x !== 7) game.board[TOTAL_H - 1][x] = 'J'
     game.active = { type: 'I', rot: 1, x: 5, y: 3 }
     const events = game.tick({ dir: 0, softDrop: false, actions: ['hardDrop'] })
     expect(game.lines).toBe(17)
     expect(game.streak).toBe(0)
-    expect(events).toContainEqual({ type: 'attack', lines: 4 })
-    expect(game.sentLines).toBe(sentBefore + 4)
+    // single (base 0) at combo x=4: floor(ln(6)) = 1, plus 4 streak lines = 5
+    expect(events).toContainEqual({ type: 'attack', lines: 5 })
+    expect(game.sentLines).toBe(sentBefore + 5)
   })
 
   it('counts streak break lines toward sentLines even outside versus', () => {
@@ -220,7 +228,8 @@ describe('Streak mechanic', () => {
     for (let x = 0; x < BOARD_W; x++) if (x !== 7) game.board[TOTAL_H - 1][x] = 'J'
     game.active = { type: 'I', rot: 1, x: 5, y: 3 }
     game.tick({ dir: 0, softDrop: false, actions: ['hardDrop'] })
-    expect(game.sentLines).toBe(sentBefore + 4)
+    // same 5-line break as the versus case: ln(6)=1 + 4 streak lines
+    expect(game.sentLines).toBe(sentBefore + 5)
     expect(game.apm).toBeGreaterThan(0)
   })
 

@@ -6,6 +6,8 @@ import { useLobby } from '../state/lobby'
 import { net } from '../net/connection'
 import { MatchClient, type Intermission, type OpponentState } from '../net/match-client'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
+import { EffectsSystem } from '../render/effects'
+import { SendPopupRenderer } from '../render/cleartext'
 import { GarbageMeter } from './GarbageMeter'
 import { StreakBox } from './StreakBox'
 import { formatNum } from './format'
@@ -213,6 +215,10 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
     let lastHudUpdate = 0
     let paused = false
 
+    const fx = new EffectsSystem(settings.fx)
+    fx.setShakeEnabled(settings.shake)
+    const sendPopups = new SendPopupRenderer()
+
     const runner = new GameRunner({
       mode: 'versus',
       gameOptions: {
@@ -220,7 +226,16 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
         attack: settings.attack,
         handling: handlingFromSettings(settings),
       },
-      onEvent: (events: GameEvent[]) => client.handleEvents(events),
+      onEvent: (events: GameEvent[]) => {
+        client.handleEvents(events)
+        const now = performance.now()
+        for (const ev of events) {
+          if (ev.type === 'clear') {
+            if (settings.fx.sendPopups) sendPopups.push(ev.attack, runner.game.combo, now)
+            fx.lineClear(ev.rows, CELL, ev.info, ev.attack, runner.game.combo)
+          }
+        }
+      },
       onEnd: () => {},
     })
 
@@ -297,7 +312,13 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
       // gone — re-acquire contexts fresh each frame to survive remounts
       if (!spectatingRef.current && canvasRef.current && holdRef.current && nextRef.current) {
         const g = runner.game
-        renderBoard(canvasRef.current.getContext('2d')!, g.board, g.active, g.ghostPiece, { cellSize: CELL, showGhost: settings.ghost })
+        const ctx = canvasRef.current.getContext('2d')!
+        renderBoard(ctx, g.board, g.active, g.ghostPiece, { cellSize: CELL, showGhost: settings.ghost })
+        fx.update(dt / 1000)
+        fx.draw(ctx)
+        fx.drawOverlay(ctx, canvasRef.current.width, canvasRef.current.height, t)
+        if (settings.fx.sendPopups) sendPopups.draw(ctx, canvasRef.current.width, canvasRef.current.height, t)
+        fx.applyShake(canvasRef.current, t)
         const holdCtx = holdRef.current.getContext('2d')!
         holdCtx.clearRect(0, 0, holdCtx.canvas.width, holdCtx.canvas.height)
         drawMiniPiece(holdCtx, g.hold, holdCtx.canvas.width / 2, 24, 12)

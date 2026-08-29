@@ -1,21 +1,67 @@
-import type { ClearInfo } from '../engine/attack'
+import type { ClearInfo, AttackResult } from '../engine/attack'
 import { PIECE_COLORS } from './canvas'
 import { HIDDEN_H, type ActivePiece } from '../engine/types'
 import { cellsFor } from '../engine/pieces'
 
-export interface EffectLevelInfo {
-  level: number
+/**
+ * Per-parameter visual effects config. Each parameter can be varied
+ * independently; the presets below just set all of them at once.
+ */
+export interface EffectsConfig {
+  /** 0 = off, 1 = normal density, 2 = cranked density + faster bursts */
+  particles: number
+  /** 0 = off, 1 = base shockwave on major clears, 2 = extra combo pulses */
+  rings: number
+  /** 0 = off, 1 = majors only, 2 = every cleared row */
+  rowFlash: number
+  /** tetris light beams + streaking sparks */
+  beams: boolean
+  /** full-canvas flash on major clears */
+  screenFlash: boolean
+  /** hard-drop impact dust */
+  impact: boolean
+  /** send-line number popups (combo totals, x-multiplier tags, streak breaks) */
+  sendPopups: boolean
+}
+
+export type FxPreset = 'minimal' | 'medium' | 'high' | 'ultra'
+
+export const FX_PRESETS: Record<FxPreset, EffectsConfig> = {
+  minimal: { particles: 0, rings: 0, rowFlash: 1, beams: false, screenFlash: false, impact: false, sendPopups: true },
+  medium: { particles: 1, rings: 1, rowFlash: 1, beams: true, screenFlash: false, impact: false, sendPopups: true },
+  high: { particles: 1, rings: 2, rowFlash: 2, beams: true, screenFlash: true, impact: true, sendPopups: true },
+  ultra: { particles: 2, rings: 2, rowFlash: 2, beams: true, screenFlash: true, impact: true, sendPopups: true },
+}
+
+export const FX_PRESET_ORDER: FxPreset[] = ['minimal', 'medium', 'high', 'ultra']
+
+export interface FxPresetInfo {
+  id: FxPreset
   name: string
   desc: string
 }
 
-export const EFFECT_LEVELS: EffectLevelInfo[] = [
-  { level: 1, name: 'MINIMAL', desc: 'no particle effects' },
-  { level: 2, name: 'CLASSIC', desc: 'subtle bursts; quiet on singles/doubles/triples, louder on big clears' },
-  { level: 3, name: 'VIVID', desc: 'row flash, shockwaves and unique spin/tetris/perfect-clear effects' },
-  { level: 4, name: 'DYNAMIC', desc: 'adds screen flashes, light beams and hard-drop impact dust' },
-  { level: 5, name: 'OVERDRIVE', desc: 'everything cranked; combo-scaled intensity' },
+export const FX_PRESET_INFO: FxPresetInfo[] = [
+  { id: 'minimal', name: 'MINIMAL', desc: 'no particles, rings or flashes; just row highlights and send popups' },
+  { id: 'medium', name: 'MEDIUM', desc: 'subtle bursts, row flash and tetris beams; quiet on singles/doubles/triples' },
+  { id: 'high', name: 'HIGH', desc: 'row flash, shockwaves, screen flashes, beams, impact dust and combo pulses' },
+  { id: 'ultra', name: 'ULTRA', desc: 'everything cranked; dense sparks and combo-scaled intensity' },
 ]
+
+/** Legacy mapping from the old 1-5 effect levels to the preset config. */
+export function effectsConfigFromLevel(level: number): EffectsConfig {
+  if (level <= 1) return FX_PRESETS.minimal
+  if (level === 2) return FX_PRESETS.medium
+  if (level <= 4) return FX_PRESETS.high
+  return FX_PRESETS.ultra
+}
+
+export function presetFromConfig(cfg: EffectsConfig): FxPreset | null {
+  for (const p of FX_PRESET_ORDER) {
+    if (JSON.stringify(FX_PRESETS[p]) === JSON.stringify(cfg)) return p
+  }
+  return null
+}
 
 interface Spark {
   x: number
@@ -63,7 +109,7 @@ const MAX_SPARKS = 900
 const FIRE_COLORS = ['#ffb347', '#ff7043']
 
 export class EffectsSystem {
-  private level: number
+  private config: EffectsConfig
   private shakeEnabled = true
   private sparks: Spark[] = []
   private rings: Ring[] = []
@@ -77,25 +123,31 @@ export class EffectsSystem {
   private flashPeak = 0
   private flashColor = '#ffffff'
 
-  constructor(level = 2) {
-    this.level = Math.min(5, Math.max(1, Math.round(level)))
+  constructor(config: EffectsConfig = FX_PRESETS.high) {
+    this.config = config
   }
 
-  setLevel(level: number) {
-    this.level = Math.min(5, Math.max(1, Math.round(level)))
+  setConfig(config: EffectsConfig) {
+    this.config = config
   }
 
   setShakeEnabled(v: boolean) {
     this.shakeEnabled = v
   }
 
-  lineClear(rows: number[], cellSize: number, info: ClearInfo, combo = 0) {
-    if (this.level < 2 || rows.length === 0) return
+  lineClear(rows: number[], cellSize: number, info: ClearInfo, attack: AttackResult, combo = 0) {
+    if (rows.length === 0) return
     const now = performance.now()
     const spin = info.spin !== 'none'
     const pc = info.perfectClear
     const tetris = !spin && info.count >= 4
     const major = spin || tetris || pc
+
+    // scale by lines actually sent, not the clear type: a triple after a big
+    // combo multiplier (6+ lines) pops harder than a lone tetris
+    const sent = Math.max(0, attack.totalLines)
+    const boost = 1 + Math.min(Math.max(0, sent - 4) * 0.15, 0.9)
+    const comboStep = Math.max(0, combo - 3)
 
     let minY = Infinity
     let maxY = -Infinity
@@ -112,7 +164,7 @@ export class EffectsSystem {
 
     // cleared-row highlight: bright for majors, faint whisper for minors
     const flashAlpha = major ? 0.5 : 0.18
-    if (this.level >= 3 || major) {
+    if (this.config.rowFlash >= 1 && (major || this.config.rowFlash >= 2)) {
       for (const row of rows) {
         const vy = (row - HIDDEN_H) * cellSize
         if (vy < 0) continue
@@ -122,7 +174,8 @@ export class EffectsSystem {
 
     // ---- minor clears (plain single/double/triple): deliberately quiet ----
     if (!major) {
-      const count = this.level >= 5 ? 7 : this.level >= 4 ? 6 : this.level >= 3 ? 5 : 3
+      if (this.config.particles === 0) return
+      const count = this.config.particles >= 2 ? 7 : 4
       for (const row of rows) {
         const vy = (row - HIDDEN_H) * cellSize
         if (vy < 0) continue
@@ -134,9 +187,6 @@ export class EffectsSystem {
     }
 
     // ---- major clears: unique signature per event type ----
-    const comboStep = Math.max(0, combo - 3)
-    const boost = 1 + Math.min(comboStep * 0.12, 0.8)
-
     let palette: string[]
     if (pc) palette = ['#ffd966', '#fff3c4']
     else if (tetris) palette = ['#8fd7ff', '#ffffff']
@@ -144,23 +194,24 @@ export class EffectsSystem {
     else if (info.piece === 'S' || info.piece === 'Z') palette = ['#7fbf7f', '#bf7f7f']
     else palette = ['#7f93bf', '#bf9a5f'] // J/L spins
 
-    const count = Math.round((this.level >= 5 ? 24 : this.level >= 4 ? 16 : this.level >= 3 ? 12 : 8) * boost)
-    const speed = this.level >= 5 ? 190 : this.level >= 4 ? 150 : this.level >= 3 ? 130 : 100
-
-    for (const row of rows) {
-      const vy = (row - HIDDEN_H) * cellSize
-      if (vy < 0) continue
-      if (this.level >= 3) {
-        for (let x = 0; x < 10; x++) {
-          this.burst(x * cellSize + cellSize / 2, vy + cellSize / 2, count, speed, this.pick(palette, comboStep), boost, 3.5)
+    if (this.config.particles > 0) {
+      const count = Math.round((this.config.particles >= 2 ? 24 : 14) * boost)
+      const speed = this.config.particles >= 2 ? 190 : 140
+      for (const row of rows) {
+        const vy = (row - HIDDEN_H) * cellSize
+        if (vy < 0) continue
+        if (this.config.particles >= 2) {
+          for (let x = 0; x < 10; x++) {
+            this.burst(x * cellSize + cellSize / 2, vy + cellSize / 2, count, speed, this.pick(palette, comboStep), boost, 3.5)
+          }
+        } else {
+          this.burst(cx, vy + cellSize / 2, count, speed, this.pick(palette, comboStep), boost, 4)
         }
-      } else {
-        this.burst(cx, vy + cellSize / 2, count, speed, this.pick(palette, comboStep), boost, 4)
       }
     }
 
     // tetris: horizontal light beams + fast streaking sparks along the rows
-    if (tetris && this.level >= 3) {
+    if (tetris && this.config.beams) {
       for (const row of rows) {
         const vy = (row - HIDDEN_H) * cellSize
         if (vy < 0) continue
@@ -183,12 +234,12 @@ export class EffectsSystem {
     }
 
     // t-spin: twin counter-rotating spirals from the clear centre
-    if (info.piece === 'T' && spin && this.level >= 3) {
+    if (info.piece === 'T' && spin && this.config.particles >= 1) {
       for (let ringDir = 1; ringDir >= -1; ringDir -= 2) {
         for (let i = 0; i < 14; i++) {
           const a = (i / 14) * Math.PI * 2
           const r0 = cellSize * 1.2
-          const vt = speed * 0.9 * ringDir
+          const vt = 130 * 0.9 * ringDir
           this.pushSpark({
             x: cx + Math.cos(a) * r0,
             y: cy + Math.sin(a) * r0 * 0.6,
@@ -204,11 +255,11 @@ export class EffectsSystem {
     }
 
     // s/z spin: sharp diagonal crossfire
-    if ((info.piece === 'S' || info.piece === 'Z') && spin) {
+    if ((info.piece === 'S' || info.piece === 'Z') && spin && this.config.particles >= 1) {
       for (let i = 0; i < 16; i++) {
         const band = (Math.PI / 4) * (1 + 2 * (i % 4)) // 45/135/225/315 degrees
         const a = band + (Math.random() - 0.5) * 0.5
-        const v = speed * 1.2
+        const v = 150 * 1.2
         this.pushSpark({
           x: cx + (Math.random() - 0.5) * 6 * cellSize,
           y: cy + (Math.random() - 0.5) * 2 * cellSize,
@@ -224,7 +275,7 @@ export class EffectsSystem {
     }
 
     // j/l spin: bursts out of the four corners of the cleared area
-    if ((info.piece === 'J' || info.piece === 'L') && spin) {
+    if ((info.piece === 'J' || info.piece === 'L') && spin && this.config.particles >= 1) {
       const xs = [cx - 4.5 * cellSize, cx + 4.5 * cellSize]
       const ys = [minY + cellSize / 2, maxY + cellSize / 2]
       for (const px of xs) {
@@ -232,7 +283,7 @@ export class EffectsSystem {
           const ax = px < cx ? -Math.PI * 0.75 : -Math.PI * 0.25
           for (let i = 0; i < 8; i++) {
             const a = ax + (Math.random() - 0.5) * 0.7
-            const v = speed * (0.8 + Math.random() * 0.5)
+            const v = 130 * (0.8 + Math.random() * 0.5)
             this.pushSpark({
               x: px,
               y: py,
@@ -249,7 +300,7 @@ export class EffectsSystem {
     }
 
     // perfect clear: golden ember fountain rising from the board floor
-    if (pc && this.level >= 3) {
+    if (pc && this.config.particles >= 1) {
       for (let i = 0; i < 40; i++) {
         this.pushSpark({
           x: Math.random() * 10 * cellSize,
@@ -264,54 +315,53 @@ export class EffectsSystem {
       }
     }
 
-    // shockwave rings: majors from vivid up, extra pulses as combos climb
-    if (this.level >= 3) {
+    // shockwave rings: base pulse on majors, extra pulses as combos climb
+    if (this.config.rings >= 1) {
       const ringColor = pc ? '#ffe9a8' : tetris ? '#bfeaff' : info.piece === 'T' ? '#dcc2ff' : '#cccccc'
       this.rings.push({
         x: cx,
         y: cy,
         r: cellSize,
-        vr: pc ? 900 : this.level >= 5 ? 800 : 620,
+        vr: pc ? 900 : this.config.rings >= 2 ? 800 : 620,
         life: 0.35,
         maxLife: 0.35,
         color: ringColor,
-        lineWidth: this.level >= 5 ? 4 : 2.5,
+        lineWidth: this.config.rings >= 2 ? 4 : 2.5,
       })
-      const extraPulses = Math.min(comboStep, 3)
-      for (let i = 1; i <= extraPulses; i++) {
-        this.rings.push({
-          x: cx,
-          y: cy,
-          r: cellSize * (1 + i * 0.6),
-          vr: 500 + i * 120,
-          life: 0.3,
-          maxLife: 0.3,
-          color: FIRE_COLORS[i % 2],
-          lineWidth: 2,
-        })
+      if (this.config.rings >= 2) {
+        const extraPulses = Math.min(comboStep, 3)
+        for (let i = 1; i <= extraPulses; i++) {
+          this.rings.push({
+            x: cx,
+            y: cy,
+            r: cellSize * (1 + i * 0.6),
+            vr: 500 + i * 120,
+            life: 0.3,
+            maxLife: 0.3,
+            color: FIRE_COLORS[i % 2],
+            lineWidth: 2,
+          })
+        }
       }
     }
 
-    // screen flash: dynamic+ on any major, overdrive tints it per event
-    if (this.level >= 4) {
+    // screen flash on majors
+    if (this.config.screenFlash) {
       let color = '#ffffff'
-      if (this.level >= 5) {
-        if (pc) color = '#ffd966'
-        else if (tetris) color = '#8fd7ff'
-        else if (info.piece === 'T') color = '#cfa6ff'
-      }
-      const peak = pc ? (this.level >= 5 ? 0.34 : 0.2) : this.level >= 5 ? 0.26 : 0.13
-      this.flash(color, peak, this.level >= 5 ? 280 : 200, now)
+      if (pc) color = '#ffd966'
+      else if (tetris) color = '#8fd7ff'
+      else if (info.piece === 'T') color = '#cfa6ff'
+      const peak = pc ? 0.2 : 0.14
+      this.flash(color, peak, 200, now)
     }
 
-    // shake reserved for majors only
-    const mag = this.level >= 5 ? 8 : this.level >= 4 ? 6 : this.level >= 3 ? 5 : 4
-    const dur = this.level >= 5 ? 220 : 170
-    this.triggerShake(mag, dur, now)
+    // shake reserved for majors only; strength scales with the config
+    const mag = this.config.particles >= 2 ? 8 : this.config.rings >= 2 ? 6 : 5
+    this.triggerShake(mag, 170, now)
   }
 
   hardDropImpact(piece: ActivePiece, cellSize: number) {
-    if (this.level < 4) return
+    if (!this.config.impact) return
     const now = performance.now()
     const color = PIECE_COLORS[piece.type]
     const cells = cellsFor(piece.type, piece.rot)
@@ -320,7 +370,7 @@ export class EffectsSystem {
       const prev = lowest.get(c.x)
       if (prev === undefined || c.y > prev) lowest.set(c.x, c.y)
     }
-    const n = this.level >= 5 ? 4 : 2
+    const n = this.config.particles >= 2 ? 4 : 2
     for (const [cx, cy] of lowest) {
       const x = (piece.x + cx) * cellSize + cellSize / 2
       const y = (piece.y + cy - HIDDEN_H) * cellSize + cellSize
@@ -341,11 +391,10 @@ export class EffectsSystem {
         })
       }
     }
-    this.triggerShake(this.level >= 5 ? 3 : 1.5, 90, now)
+    this.triggerShake(this.config.particles >= 2 ? 3 : 1.5, 90, now)
   }
 
   update(dt: number) {
-    if (this.level < 2) return
     for (const p of this.sparks) {
       p.x += p.vx * dt
       p.y += p.vy * dt
@@ -369,8 +418,7 @@ export class EffectsSystem {
   }
 
   draw(ctx: CanvasRenderingContext2D) {
-    if (this.level < 2) return
-    const additive = this.level >= 4
+    const additive = this.config.particles >= 2 || this.config.screenFlash
 
     for (const f of this.rowFlashes) {
       ctx.globalAlpha = (f.life / f.maxLife) * f.alpha
@@ -466,18 +514,18 @@ export class EffectsSystem {
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2
       const v = speed * boost * (0.3 + Math.random() * 0.7)
-      const life = (0.3 + Math.random() * 0.5) * (this.level >= 5 ? 1.3 : 1)
-      const useWhite = this.level >= 3 && Math.random() < 0.35
+      const life = (0.3 + Math.random() * 0.5) * (this.config.particles >= 2 ? 1.3 : 1)
+      const useWhite = this.config.particles >= 1 && Math.random() < 0.35
       this.sparks.push({
         x,
         y,
         vx: Math.cos(angle) * v,
-        vy: Math.sin(angle) * v - (this.level >= 3 ? 80 : 60),
+        vy: Math.sin(angle) * v - (this.config.particles >= 2 ? 80 : 60),
         g: 400,
         life,
         maxLife: life,
         color: useWhite ? '#ffffff' : (color ?? '#aaaaaa'),
-        size: this.level >= 5 ? size + Math.random() * 2.5 : size,
+        size: this.config.particles >= 2 ? size + Math.random() * 2.5 : size,
       })
     }
   }

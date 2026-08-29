@@ -9,8 +9,6 @@ export interface AttackConfig {
   spinDouble: number
   spinTriple: number
   perfectClear: number
-  comboStep: number
-  comboMaxMult: number
   b2bBonus: number
   streakThreshold: number
 }
@@ -24,8 +22,6 @@ export const DEFAULT_ATTACK: AttackConfig = {
   spinDouble: 4,
   spinTriple: 6,
   perfectClear: 10,
-  comboStep: 0.25,
-  comboMaxMult: 3,
   b2bBonus: 1,
   streakThreshold: 3,
 }
@@ -68,11 +64,18 @@ export function computeAttack(
   }
 
   const isPowerClear = clear.spin !== 'none' || clear.count >= 4
-  const comboMult = Math.min(1 + combo * config.comboStep, config.comboMaxMult)
   const b2b = b2bActive && isPowerClear && !clear.perfectClear
 
+  // Exact combo scaling: attack = base * (1 + 0.25 * combo), no cap — larger
+  // base attacks gain more absolute lines per combo step. Zero-base attacks
+  // (e.g. singles with a 0 table value) grow via ln(1 + 1.25 * combo) from the
+  // 2-combo on, so long chains of weak clears eventually send something.
+  // All values are rounded DOWN.
+  const comboMult = 1 + combo * 0.25
+  const scaled = base === 0 && combo >= 1 ? Math.floor(Math.log(1 + 1.25 * combo)) : Math.floor(base * comboMult)
+
   const streakBonus = brokenStreak > config.streakThreshold ? brokenStreak : 0
-  const total = Math.round(base * comboMult) + (b2b ? config.b2bBonus : 0) + streakBonus
+  const total = scaled + (b2b ? config.b2bBonus : 0) + streakBonus
 
   return {
     baseLines: base,
