@@ -17,6 +17,9 @@ dist-ssr
 .env.*
 !.env.example
 
+# deployment scripts (config.bat carries credentials - do not commit)
+deploy/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
