@@ -10,7 +10,7 @@ server/          # Node + ws multiplayer server (plain `node server/index.ts`)
   lobby.ts       # lobby membership, host transfer, settings
   registry.ts    # join-code registry, public list
   codes.ts       # join code generator
-  session.ts     # authoritative in-match state: attack computation, garbage, snapshot cross-check
+  session.ts     # authoritative match state: attack computation, garbage routing, target/score; reconstructs each player's board from lock cells and sends a real resync on divergence
   lossyproxy.ts  # test helper: drops server messages to simulate packet loss
 shared/          # imported by both server and client (explicit .ts extensions)
   protocol.ts    # single source of truth for client<->server messages
@@ -30,8 +30,8 @@ src/
     stackstats.ts    # stack quality metrics: holes, bumpiness, heights, stack top
     game.ts          # core simulation: tick(input) -> events
   game/
-    runner.ts        # fixed-timestep accumulator, mode end detection
-    input.ts         # keyboard -> engine actions (DAS dir stack)
+    runner.ts        # fixed-timestep accumulator + buffered action queue, mode end detection
+    input.ts         # keyboard -> engine actions (DAS dir stack); shared drain/bind helpers
   render/
     canvas.ts        # playfield + mini-piece renderer (canvas 2D)
     effects.ts       # tiered visual effects system (cosmetic only; levels 1-5)
@@ -55,9 +55,19 @@ src/
 
 1. `engine/` must never import from `ui/`, `render/`, or React. It is pure logic and fully unit-testable.
 2. The game loop is a single `requestAnimationFrame` driving a fixed-timestep accumulator; it calls `game.tick()` and hands the result to the renderer.
-3. React never re-renders per frame. HUD values are pushed via subscriptions at a throttled rate or refs.
+3. React never re-renders per frame. HUD values are pushed via subscriptions at a throttled rate or refs. Game screens throttle `setHud`-style updates with a `lastHudUpdate > 100` guard — never update React state from the inner loop.
 4. Settings changes take effect immediately in the running engine where possible (DAS/ARR/SDF/keybinds).
 5. Particles/effects live behind the global effects-level setting (`EFFECT_LEVELS` 1-5 in `render/effects.ts`); level 1 disables them entirely and must not change gameplay behavior.
+
+## Simulation & input
+
+Gameplay and input are decoupled from the render framerate:
+
+- The simulator (`GameRunner.advance`) runs in fixed 60Hz ticks via a capped accumulator (`STEP_MS = 1000/60`, max catch-up 200ms). Movement (DAS/ARR/SDF) and gravity are per-tick, so behavior is identical on any display refresh.
+- **Discrete actions (rotate / hold / hard drop) are buffered inside the runner**, not dropped between ticks: `queueActions()` appends to an internal queue, and `advance()` consumes and clears that queue exactly once, on the first tick that actually runs. This guarantees a tap is never lost on frames where no tick fires (e.g. high-refresh displays) and never double-applied when one frame catches up several ticks. `clearActions()` discards buffered input (used on pause).
+- Input wiring is shared by every game screen through `game/input.ts`: `bindInput(keybinds)` attaches an `InputManager`, and `drainFrame(input, runner)` must be called **once per animation frame** — it drains, immediately calls `runner.queueActions`, and reports which control keys (retry/pause/assist/hard drop) were pressed. Draining without queueing is a bug that silently drops inputs.
+- Handling timings are built from settings via `state/settings.ts::handlingFromSettings` (ms -> 60Hz frame counts), shared by all screens.
+
 
 ## Determinism
 

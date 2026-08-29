@@ -138,7 +138,7 @@ function SettingsFileSection() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'tetris-liberation-settings.json'
+    a.download = 'tetris-relinked-settings.json'
     a.click()
     URL.revokeObjectURL(url)
     setStatus('EXPORTED')

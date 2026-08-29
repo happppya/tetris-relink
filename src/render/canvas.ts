@@ -36,6 +36,7 @@ export function renderBoard(
 ) {
   const { cellSize, showGhost } = opts
   const w = BOARD_W * cellSize
+  if (!Array.isArray(board) || board.length !== TOTAL_H || board.some((row) => !Array.isArray(row) || row.length !== BOARD_W)) return
   const h = VISIBLE_H * cellSize
 
   let dangerRow = TOTAL_H

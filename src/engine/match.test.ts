@@ -219,6 +219,45 @@ describe('forfeits', () => {
   })
 })
 
+describe('player removal (disconnect)', () => {
+  it('a removed 1v1 opponent forfeits the game and the survivor wins the match', () => {
+    const m = new Match(ft(3), ['a', 'b'])
+    const evs = m.removePlayer('b')
+    expect(ofType(evs, 'eliminated')).toEqual([{ type: 'eliminated', playerId: 'b', reason: 'forfeit', alive: 1 }])
+    expect(ofType(evs, 'game_won')).toHaveLength(1)
+    expect(ofType(evs, 'match_won')[0]).toMatchObject({ winnerId: 'a' })
+    expect(m.status).toBe('finished')
+    expect(m.winnerId).toBe('a')
+  })
+
+  it('a removed player is gone permanently and is not revived in later rounds', () => {
+    const m = new Match(ft(5), ['a', 'b', 'c'])
+    m.removePlayer('c')
+    expect(m.status).toBe('active')
+    expect(m.playerList.map((p) => p.id)).toEqual(['a', 'b'])
+    // a top-outs, so b wins game 1; round 2 must not re-add c
+    m.topOut('a')
+    expect(m.round).toBe(2)
+    expect(m.playerList.map((p) => p.id)).toEqual(['a', 'b'])
+    expect(m.wins()).toEqual({ a: 0, b: 1 })
+  })
+
+  it('removing the only player ends the match with no winner', () => {
+    const m = new Match(ft(3), ['a'])
+    m.removePlayer('a')
+    expect(m.status).toBe('finished')
+    expect(m.winnerId).toBeNull()
+  })
+
+  it('removing after finish or for an unknown player is a no-op', () => {
+    const m = new Match(ft(1), ['a', 'b'])
+    m.removePlayer('b')
+    expect(m.status).toBe('finished')
+    expect(m.removePlayer('a')).toEqual([])
+    expect(m.removePlayer('nope')).toEqual([])
+  })
+})
+
 describe('match end state', () => {
   it('freezes the match after it is finished', () => {
     const m = new Match(ft(1), ['a', 'b'])

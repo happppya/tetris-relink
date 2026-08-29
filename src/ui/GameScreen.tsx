@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { GameRunner, type RunResult } from '../game/runner'
-import { InputManager } from '../game/input'
-import { useSettings, msToFrames } from '../state/settings'
+import { bindInput, drainFrame } from '../game/input'
+import { useSettings, handlingFromSettings } from '../state/settings'
 import { useStats } from '../state/stats'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
 import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, clearLabels } from '../render/cleartext'
 import type { GameEvent } from '../engine/game'
-import type { InputAction } from '../engine/types'
 import { formatTime, formatNum } from './format'
 import { StreakBox } from './StreakBox'
 
@@ -60,11 +59,7 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
       mode,
       blitzDuration,
       gameOptions: {
-        handling: {
-          dasFrames: Math.max(1, msToFrames(settings.dasMs)),
-          arrFrames: msToFrames(settings.arrMs),
-          sddFrames: msToFrames(settings.sddMs),
-        },
+        handling: handlingFromSettings(settings),
         attack: settings.attack,
         scoring: settings.scoring,
         startLevel: settings.startLevel,
@@ -100,12 +95,7 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
       },
     })
 
-    const codeMap: Partial<Record<string, InputAction>> = {}
-    for (const [action, code] of Object.entries(settings.keybinds)) {
-      if (code) codeMap[code] = action as InputAction
-    }
-    const input = new InputManager(() => codeMap)
-    input.attach()
+    const input = bindInput(settings.keybinds)
 
     let raf = 0
     let last = performance.now()
@@ -114,19 +104,20 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
       const dt = t - last
       last = t
 
-      const actions = input.drainActions()
-      frameHadHardDrop = actions.includes('hardDrop')
-      if (actions.includes('retry')) {
+      const ctrl = drainFrame(input, runner)
+      frameHadHardDrop = ctrl.hardDrop
+      if (ctrl.retry) {
         input.detach()
         setRetryKey((k) => k + 1)
         return
       }
-      if (actions.includes('pause')) {
+      if (ctrl.pause) {
         pausedLocal = !pausedLocal
         setPaused(pausedLocal)
+        if (pausedLocal) runner.clearActions()
       }
 
-      runner.advance(dt, { dir: input.dir, softDrop: input.softDrop, actions })
+      runner.advance(dt, { dir: input.dir, softDrop: input.softDrop })
 
       const g = runner.game
       renderBoard(ctx, g.board, g.active, g.ghostPiece, {

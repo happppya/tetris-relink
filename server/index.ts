@@ -88,12 +88,21 @@ export function startServer(port: number): ServerHandle {
   const emitMatchEvents = (entry: SessionHandle, events: MatchEvent[]) => {
     const lobby = registry.get(entry.lobbyCode)
     if (!lobby) return
+    // A fresh game is beginning: reset targeting + per-game eligibility, and hand
+    // every client a blank board (used for both the next round and a draw replay).
+    const startNextGame = () => {
+      entry.match.session.newGame()
+      sendToLobby(lobby, { type: 'game_start', round: entry.match.match.round, players: lobby.memberList, board: entry.match.freshBoard() })
+    }
     for (const event of events) {
       if (event.type === 'eliminated' && event.alive > 0) sendToLobby(lobby, { type: 'game_end', round: entry.match.match.round, winnerId: null, eliminatedIds: [event.playerId], wins: entry.match.match.wins() })
       if (event.type === 'game_won') sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: event.winnerId, eliminatedIds: [], wins: event.wins })
       if (event.type === 'game_draw') sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: null, eliminatedIds: [], wins: entry.match.match.wins() })
-      if (event.type === 'match_won') sendToLobby(lobby, { type: 'match_end', winnerId: event.winnerId, wins: event.wins })
-      if (event.type === 'game_won' && entry.match.match.status === 'active') sendToLobby(lobby, { type: 'game_start', round: entry.match.match.round, players: lobby.memberList, board: entry.match.freshBoard() })
+      // a match_won with no winner means every player has left; nobody is left
+      // to notify, so skip the broadcast
+      if (event.type === 'match_won' && event.winnerId !== null) sendToLobby(lobby, { type: 'match_end', winnerId: event.winnerId, wins: event.wins })
+      if (event.type === 'game_won' && entry.match.match.status === 'active') startNextGame()
+      if (event.type === 'game_draw') startNextGame()
     }
   }
 
@@ -202,6 +211,8 @@ export function startServer(port: number): ServerHandle {
       case 'topout': {
         const sess = sessionFor(conn, msg.matchId)
         if (!sess) return
+        // mark the player out of the current game so others can't target them
+        sess.match.session.eliminate(conn.id)
         emitMatchEvents(sess, sess.match.match.topOut(conn.id))
         return
       }
@@ -232,6 +243,8 @@ export function startServer(port: number): ServerHandle {
       case 'snapshot': {
         const sess = sessionFor(conn, msg.matchId)
         if (!sess) return
+        // Cross-check the client's board against the server-authoritative copy;
+        // on real divergence, resync the client instead of letting it silently drift.
         const res = sess.match.snapshot(conn.id, msg.board, msg.score)
         const lobby = registry.get(sess.lobbyCode)
         if (lobby) sendToLobby(lobby, { type: 'board_update', playerId: conn.id, board: msg.board, score: msg.score, pendingGarbage: sess.match.pending(conn.id) })
@@ -269,7 +282,10 @@ export function startServer(port: number): ServerHandle {
         const lobby = registry.get(conn.lobbyCode)
         const match = sessionFor(conn)
         if (lobby && match) {
-          emitMatchEvents(match, match.match.match.forfeit(conn.id))
+          // permanent removal: the leaver forfeits the current game and is dropped
+          // from the roster so later round resets can't revive a ghost opponent,
+          // which would hang the match
+          emitMatchEvents(match, match.match.match.removePlayer(conn.id))
           match.match.session.remove(conn.id)
         }
         if (lobby) sendToLobby(lobby, { type: 'player_left', playerId: conn.id })
@@ -308,5 +324,5 @@ export function startServer(port: number): ServerHandle {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT) || 8787
   startServer(port)
-  console.log(`tetris-liberation server listening on ws://localhost:${port}`)
+  console.log(`tetris-relinked server listening on ws://localhost:${port}`)
 }

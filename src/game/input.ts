@@ -1,7 +1,54 @@
 import type { InputAction } from '../engine/types'
+import type { GameRunner } from './runner'
 
 const DIR_ACTIONS: InputAction[] = ['moveLeft', 'moveRight']
 const HELD_ACTIONS: InputAction[] = ['softDrop', 'moveLeft', 'moveRight']
+
+/** Builds a code -> action map from keybinds (used by InputManager). */
+export function codeMapFrom(keybinds: Record<InputAction, string>): Partial<Record<string, InputAction>> {
+  const map: Partial<Record<string, InputAction>> = {}
+  for (const [action, code] of Object.entries(keybinds)) {
+    if (code) map[code] = action as InputAction
+  }
+  return map
+}
+
+/** Creates an attached InputManager wired to the given keybinds. */
+export function bindInput(keybinds: Record<InputAction, string>): InputManager {
+  const input = new InputManager(() => codeMapFrom(keybinds))
+  input.attach()
+  return input
+}
+
+export interface FrameControls {
+  /** tap actions drained this frame (already queued into the runner). */
+  actions: InputAction[]
+  hardDrop: boolean
+  retry: boolean
+  pause: boolean
+  assist: boolean
+}
+
+/**
+ * Drains one frame of discrete inputs from `input` into the runner's buffered
+ * action queue and reports which UI control keys were pressed. Call exactly once
+ * per animation frame and always pass the drained `actions` along via this
+ * helper — draining without queueing drops the actions on non-ticking frames.
+ */
+export function drainFrame(
+  input: Pick<InputManager, 'drainActions'>,
+  runner: Pick<GameRunner, 'queueActions'>,
+): FrameControls {
+  const actions = input.drainActions()
+  runner.queueActions(actions)
+  return {
+    actions,
+    hardDrop: actions.includes('hardDrop'),
+    retry: actions.includes('retry'),
+    pause: actions.includes('pause'),
+    assist: actions.includes('assist'),
+  }
+}
 
 export class InputManager {
   private held = new Set<InputAction>()

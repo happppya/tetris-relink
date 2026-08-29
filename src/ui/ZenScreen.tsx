@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { GameRunner } from '../game/runner'
-import { InputManager } from '../game/input'
+import { bindInput, drainFrame } from '../game/input'
 import { Game, type GameEvent, type GameSnapshot } from '../engine/game'
-import { useSettings, msToFrames } from '../state/settings'
+import { useSettings, handlingFromSettings } from '../state/settings'
 import { useZen, zenLevelInfo, type GarbageMode, type GarbageMultiplier } from '../state/zen'
 import { renderBoard, drawMiniPiece, PIECE_COLORS } from '../render/canvas'
 import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, clearLabels } from '../render/cleartext'
 import { cellsFor } from '../engine/pieces'
-import { HIDDEN_H, type Cell, type InputAction } from '../engine/types'
-import { DRILLS, DRILL_BY_ID, describeGoal, parseDrillBoard, type Drill } from '../engine/drills'
+import { HIDDEN_H, type Cell } from '../engine/types'
 import { bumpiness, columnHeights, countHoles } from '../engine/stackstats'
 import { HintProvider } from '../ai/assistant'
 import { applyPlacementToBoard, boardsEqual, placementCells } from '../ai/board'
@@ -59,52 +58,16 @@ const GARBAGE_MODES: { id: GarbageMode; label: string; hint: string }[] = [
   { id: 'cheese', label: 'CHEESE LAYER', hint: 'bottom rows stay filled with garbage' },
 ]
 
-const DRILL_CATEGORIES: { id: Drill['category']; label: string }[] = [
-  { id: 'tspin', label: 'T-SPINS' },
-  { id: 'pc', label: 'PERFECT CLEAR' },
-  { id: 'opener', label: 'OPENERS' },
-  { id: 'stacking', label: 'STACKING' },
-]
-
-interface DrillProgress {
-  spins: number
-  pcs: number
-  lines: number
-  tetrises: number
-  flats: number
-  pieces: number
-}
-
-function progressLine(drill: Drill, p: DrillProgress): string {
-  const g = drill.goal
-  switch (g.kind) {
-    case 'spinClears':
-      return `SPINS ${p.spins}/${g.count}`
-    case 'perfectClear':
-      return `PC ${p.pcs}/${g.count}`
-    case 'lines':
-      return `LINES ${p.lines}/${g.count}`
-    case 'tetrises':
-      return `TETRISES ${p.tetrises}/${g.count}`
-    case 'flatPieces':
-      return `CLEAN ${p.flats}/${g.count}`
-  }
-}
-
 export function ZenScreen({ onExit }: { onExit: () => void }) {
   const settings = useSettings()
   const zenSettings = useZen((s) => s.settings)
   const updateZen = useZen((s) => s.updateSettings)
   const levelInfo = zenLevelInfo(useZen((s) => s.xp))
-  const drill = zenSettings.drill ? DRILL_BY_ID.get(zenSettings.drill) ?? null : null
-
   const [retryKey, setRetryKey] = useState(0)
   const [paused, setPaused] = useState(false)
   const [over, setOver] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [assistActive, setAssistActive] = useState(false)
-  const [drillOverlay, setDrillOverlay] = useState<null | 'complete' | 'failed'>(null)
-  const [drillProgress, setDrillProgress] = useState<DrillProgress | null>(null)
   const [hud, setHud] = useState({
     score: 0,
     lines: 0,
@@ -126,16 +89,14 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
   const undoStack = useRef<GameSnapshot[]>([])
   const redoStack = useRef<GameSnapshot[]>([])
   const assistActiveRef = useRef(false)
-  const drillRef = useRef<Drill | null>(drill)
   const zenRef = useRef(zenSettings)
   useEffect(() => {
     zenRef.current = zenSettings
-    drillRef.current = drill
     if (!zenSettings.practice) {
       undoStack.current.length = 0
       redoStack.current.length = 0
     }
-  }, [zenSettings, drill])
+  }, [zenSettings])
 
   useEffect(() => {
     const canvas = canvasRef.current!
@@ -152,50 +113,6 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
     let frameHadHardDrop = false
     const popups = new ClearPopupRenderer()
     const hintProvider = new HintProvider()
-    setDrillOverlay(null)
-
-    const activeDrill = drillRef.current
-
-    // ---- drill tracking ----
-    const progress: DrillProgress = { spins: 0, pcs: 0, lines: 0, tetrises: 0, flats: 0, pieces: 0 }
-    let prevHoles = activeDrill?.board ? countHoles(parseDrillBoard(activeDrill.board)) : 0
-    let drillDone = false
-    const finishDrill = (result: 'complete' | 'failed') => {
-      if (drillDone) return
-      drillDone = true
-      runnerRef.current!.paused = true
-      setDrillOverlay(result)
-    }
-    const checkDrillGoal = () => {
-      if (!activeDrill || drillDone) return
-      const g = activeDrill.goal
-      const met =
-        g.kind === 'spinClears'
-          ? progress.spins >= g.count
-          : g.kind === 'perfectClear'
-            ? progress.pcs >= g.count
-            : g.kind === 'lines'
-              ? progress.lines >= g.count
-              : g.kind === 'tetrises'
-                ? progress.tetrises >= g.count
-                : progress.flats >= g.count
-      if (met) finishDrill('complete')
-    }
-    const trackDrillLock = () => {
-      if (!activeDrill || drillDone) return
-      progress.pieces++
-      const holes = countHoles(runner.game.board)
-      if (holes > prevHoles) {
-        if (activeDrill.failOnHole) finishDrill('failed')
-      } else {
-        progress.flats++
-      }
-      prevHoles = holes
-      if (!drillDone && activeDrill.maxPieces !== undefined && progress.pieces > activeDrill.maxPieces) {
-        finishDrill('failed')
-      }
-      checkDrillGoal()
-    }
 
     let hintPlacements: BotHintPlacement[] = []
     /** hintBoards[i] = board that hintPlacements[i] was planned against */
@@ -217,14 +134,8 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
         startLevel: zenSettings.gravityLevel,
         attack: settings.attack,
         scoring: settings.scoring,
-        cheeseRows: !activeDrill && zenSettings.garbage === 'cheese' ? CHEESE_ROWS : 0,
-        handling: {
-          dasFrames: Math.max(1, msToFrames(settings.dasMs)),
-          arrFrames: msToFrames(settings.arrMs),
-          sddFrames: msToFrames(settings.sddMs),
-        },
-        ...(activeDrill?.board ? { initialBoard: parseDrillBoard(activeDrill.board) } : {}),
-        ...(activeDrill?.queue ? { fixedQueue: [...activeDrill.queue] } : {}),
+        cheeseRows: zenSettings.garbage === 'cheese' ? CHEESE_ROWS : 0,
+        handling: handlingFromSettings(settings),
       },
       onEvent: (events: GameEvent[]) => {
         const now = performance.now()
@@ -232,24 +143,16 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
           if (ev.type === 'clear') {
             if (settings.clearPopups) popups.push(clearLabels(ev.info), now)
             fx.lineClear(ev.rows, CELL, ev.info, runner.game.combo)
-            if (!activeDrill && zenRef.current.garbage === 'backfire') {
+            if (zenRef.current.garbage === 'backfire') {
               runner.game.receiveGarbage(Math.round(ev.attack.totalLines * zenRef.current.multiplier), true)
-            } else if (!activeDrill && zenRef.current.garbage === 'unclear') {
+            } else if (zenRef.current.garbage === 'unclear') {
               runner.game.receiveGarbageNow(Math.round(ev.attack.totalLines * zenRef.current.multiplier))
-            }
-            if (activeDrill && !drillDone) {
-              if (ev.info.spin !== 'none') progress.spins++
-              if (ev.info.perfectClear) progress.pcs++
-              progress.lines += ev.info.count
-              if (ev.info.count === 4) progress.tetrises++
-              checkDrillGoal()
             }
           }
           if (ev.type === 'lock' && !done) {
             if (frameHadHardDrop) fx.hardDropImpact(ev.piece, CELL)
             undoStack.current.push(runner.game.snapshot())
             redoStack.current.length = 0
-            trackDrillLock()
             // keep the promised chain when the player followed the advice;
             // only re-query when the board diverged from the predicted line
             if (
@@ -305,7 +208,6 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
     })
     gameRef.current = runner.game
     runnerRef.current = runner
-    setDrillProgress(activeDrill ? { ...progress } : null)
 
     const clearHints = () => {
       hintsDirty = true
@@ -357,14 +259,12 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
       redoStack.current.push(runner.game.snapshot())
       runner.game.restore(undoStack.current.pop()!)
       clearHints()
-      if (activeDrill) prevHoles = countHoles(runner.game.board)
     }
     const redo = () => {
       if (!zenRef.current.practice || pausedLocal || done || redoStack.current.length === 0) return
       undoStack.current.push(runner.game.snapshot())
       runner.game.restore(redoStack.current.pop()!)
       clearHints()
-      if (activeDrill) prevHoles = countHoles(runner.game.board)
     }
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -378,12 +278,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
       }
     }
 
-    const codeMap: Partial<Record<string, InputAction>> = {}
-    for (const [action, code] of Object.entries(settings.keybinds)) {
-      if (code) codeMap[code] = action as InputAction
-    }
-    const input = new InputManager(() => codeMap)
-    input.attach()
+    const input = bindInput(settings.keybinds)
     window.addEventListener('keydown', onKeyDown)
 
     let raf = 0
@@ -393,19 +288,20 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
       const dt = t - last
       last = t
 
-      const actions = input.drainActions()
-      frameHadHardDrop = actions.includes('hardDrop')
-      if (actions.includes('retry')) {
+      const ctrl = drainFrame(input, runner)
+      frameHadHardDrop = ctrl.hardDrop
+      if (ctrl.retry) {
         input.detach()
         window.removeEventListener('keydown', onKeyDown)
         setRetryKey((k) => k + 1)
         return
       }
-      if (actions.includes('pause')) {
+      if (ctrl.pause) {
         pausedLocal = !pausedLocal
         setPaused(pausedLocal)
+        if (pausedLocal) runner.clearActions()
       }
-      if (actions.includes('assist')) {
+      if (ctrl.assist) {
         const next = !assistActiveRef.current
         assistActiveRef.current = next
         setAssistActive(next)
@@ -413,7 +309,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
         if (!next) hintPlacements = []
       }
 
-      runner.advance(dt, { dir: input.dir, softDrop: input.softDrop, actions })
+      runner.advance(dt, { dir: input.dir, softDrop: input.softDrop })
 
       const g = runner.game
       renderBoard(ctx, g.board, g.active, g.ghostPiece, {
@@ -508,7 +404,6 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
           bump: bumpiness(heights),
           peak: Math.max(...heights),
         })
-        if (activeDrill && !drillDone) setDrillProgress({ ...progress })
       }
 
       if (g.score > contributed) {
@@ -538,13 +433,8 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
   }
 
   useEffect(() => {
-    if (!drill) gameRef.current?.setCheese(zenSettings.garbage === 'cheese' ? CHEESE_ROWS : 0)
-  }, [zenSettings.garbage, drill])
-
-  const selectDrill = (id: string | null) => {
-    updateZen({ drill: id, garbage: 'none' })
-    setRetryKey((k) => k + 1)
-  }
+    gameRef.current?.setCheese(zenSettings.garbage === 'cheese' ? CHEESE_ROWS : 0)
+  }, [zenSettings.garbage])
 
   return (
     <main className="flex min-h-screen items-center justify-center gap-8">
@@ -565,21 +455,6 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
           <HudRow label="PEAK" value={String(hud.peak)} />
         </div>
         <StreakBox value={hud.streak} />
-        {drill && (
-          <div className="border border-neutral-600 p-2 font-mono">
-            <div className="text-[10px] tracking-widest text-neutral-500">DRILL</div>
-            <div className="text-xs text-neutral-100">{drill.name}</div>
-            <div className="mt-1 text-[10px] text-neutral-400">GOAL: {describeGoal(drill)}</div>
-            {drillProgress && (
-              <div className="mt-1 text-[10px] text-neutral-200">{progressLine(drill, drillProgress)}</div>
-            )}
-            {drill.maxPieces !== undefined && (
-              <div className="text-[10px] text-neutral-600">
-                PIECES {drillProgress?.pieces ?? 0}/{drill.maxPieces}
-              </div>
-            )}
-          </div>
-        )}
         <button
           onClick={() => setSidebarOpen(true)}
           className="border border-neutral-700 px-3 py-1 font-mono text-xs text-neutral-400 hover:border-neutral-400 hover:text-neutral-200"
@@ -605,7 +480,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
       <div className="flex flex-col items-center gap-2">
         <div className="flex items-start">
           <canvas ref={canvasRef} width={300} height={600} className="border border-neutral-700" />
-          {!drill && zenSettings.garbage !== 'none' && (
+          {zenSettings.garbage !== 'none' && (
             <div className="ml-1">
               <GarbageMeter amount={hud.incoming} />
             </div>
@@ -631,53 +506,6 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
               CLOSE
             </button>
           </div>
-
-          <section className="mb-6">
-            <h3 className="mb-2 border-b border-neutral-800 pb-1 text-[10px] tracking-widest text-neutral-600">DRILLS</h3>
-            <p className="mb-2 text-[10px] leading-relaxed text-neutral-600">
-              Picking a drill restarts zen with its board and queue.
-            </p>
-            {drill && (
-              <button
-                onClick={() => selectDrill(null)}
-                className="mb-2 w-full border border-neutral-500 px-2 py-1 text-left text-xs text-neutral-200"
-              >
-                EXIT DRILL ({drill.name})
-              </button>
-            )}
-            {DRILL_CATEGORIES.map(({ id, label }) => (
-              <div key={id} className="mb-3">
-                <div className="mb-1 text-[10px] tracking-widest text-neutral-600">{label}</div>
-                <div className="flex flex-col gap-1">
-                  {DRILLS.filter((d) => d.category === id).map((d) => {
-                    const selected = zenSettings.drill === d.id
-                    return (
-                      <div key={d.id}>
-                        <button
-                          onClick={() => selectDrill(d.id)}
-                          className={`w-full border px-2 py-1 text-left text-xs ${
-                            selected
-                              ? 'border-neutral-300 text-neutral-100'
-                              : 'border-neutral-800 text-neutral-500 hover:border-neutral-600'
-                          }`}
-                        >
-                          {d.name}
-                          <span className="block text-[10px] text-neutral-600">{d.blurb}</span>
-                        </button>
-                        {selected && (
-                          <ul className="ml-3 mt-1 list-disc text-[10px] leading-relaxed text-neutral-500">
-                            {d.tips.map((tip, i) => (
-                              <li key={i}>{tip}</li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
-          </section>
 
           <section className="mb-6">
             <h3 className="mb-2 border-b border-neutral-800 pb-1 text-[10px] tracking-widest text-neutral-600">GRAVITY</h3>
@@ -763,14 +591,11 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
               {GARBAGE_MODES.map(({ id, label, hint }) => (
                 <button
                   key={id}
-                  disabled={!!drill}
                   onClick={() => updateZen({ garbage: id })}
                   className={`border px-2 py-1 text-left text-xs ${
-                    drill
-                      ? 'cursor-not-allowed border-neutral-900 text-neutral-700'
-                      : zenSettings.garbage === id
-                        ? 'border-neutral-300 text-neutral-100'
-                        : 'border-neutral-800 text-neutral-500 hover:border-neutral-600'
+                    zenSettings.garbage === id
+                      ? 'border-neutral-300 text-neutral-100'
+                      : 'border-neutral-800 text-neutral-500 hover:border-neutral-600'
                   }`}
                 >
                   {label}
@@ -778,7 +603,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
                 </button>
               ))}
             </div>
-            {!drill && (zenSettings.garbage === 'backfire' || zenSettings.garbage === 'unclear') && (
+            {(zenSettings.garbage === 'backfire' || zenSettings.garbage === 'unclear') && (
               <div className="mt-2 flex items-center gap-2">
                 <span className="text-xs text-neutral-500">RATE</span>
                 {([0.5, 1, 2] as GarbageMultiplier[]).map((m) => (
@@ -788,49 +613,12 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
                 ))}
               </div>
             )}
-            {drill && <p className="mt-2 text-[10px] text-neutral-600">garbage is off during drills</p>}
           </section>
 
           <p className="text-[10px] leading-relaxed text-neutral-600">
             Total score flows into your XP at all times. Level requirement scales linearly.
           </p>
         </aside>
-      )}
-
-      {drillOverlay && drill && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/70 font-mono">
-          <div className="w-72 border border-neutral-500 bg-black p-6 text-center">
-            <h2 className="mb-2 text-lg tracking-widest text-neutral-100">
-              {drillOverlay === 'complete' ? 'DRILL COMPLETE' : 'DRILL FAILED'}
-            </h2>
-            <p className="mb-4 text-xs text-neutral-500">
-              {drill.name} — {describeGoal(drill)}
-            </p>
-            {drillOverlay === 'complete' && (
-              <button
-                onClick={() => {
-                  if (runnerRef.current) runnerRef.current.paused = false
-                  setDrillOverlay(null)
-                }}
-                className="mb-2 w-full border border-neutral-400 py-2 text-sm text-neutral-100 hover:bg-neutral-900"
-              >
-                KEEP PLAYING
-              </button>
-            )}
-            <button
-              onClick={() => setRetryKey((k) => k + 1)}
-              className="mb-2 w-full border border-neutral-500 py-2 text-sm text-neutral-200 hover:bg-neutral-900"
-            >
-              RETRY DRILL
-            </button>
-            <button
-              onClick={() => selectDrill(null)}
-              className="w-full border border-neutral-700 py-2 text-sm text-neutral-400 hover:bg-neutral-900"
-            >
-              FREE PLAY INSTEAD
-            </button>
-          </div>
-        </div>
       )}
 
       {(paused || over) && (

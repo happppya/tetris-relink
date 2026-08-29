@@ -35,6 +35,38 @@ describe('match lifecycle over WebSockets', () => {
     await host.close(); await guest.close()
   })
 
+  it('stops targeting a topped-out player in an N-player game', async () => {
+    const a = await connectSimulatedClient(url, 'A')
+    const b = await connectSimulatedClient(url, 'B')
+    const c = await connectSimulatedClient(url, 'C')
+    const created = a.waitFor('lobby_state')
+    a.send({ type: 'create_lobby', name: 'A', visibility: 'private', settings: { mode: 'firstToX', goal: 3, winBy: 2 } })
+    const code = (await created).lobby.code
+    for (const client of [b, c]) {
+      const joined = client.waitFor('lobby_state')
+      client.send({ type: 'join_lobby', code })
+      await joined
+    }
+    const started = a.waitFor('match_start')
+    a.send({ type: 'start_match' })
+    const match = await started
+    const cId = match.players.find((p) => p.name === 'C')!.id
+
+    // C tops out and is eliminated for the game.
+    const elimination = c.waitFor('game_end')
+    c.send({ type: 'topout', matchId: match.matchId })
+    expect((await elimination).eliminatedIds).toContain(cId)
+
+    // A points manual targeting at the now-eliminated C, then attacks.
+    a.send({ type: 'target', mode: 'manual', targetId: cId })
+    const delivered = b.waitFor('garbage')
+    a.send({ type: 'lock', lock: { rows: 4, spin: 'none', piece: 'I', perfectClear: false, combo: 0, b2b: false, streak: 0 } })
+    expect(await delivered).toMatchObject({ lines: 4 })
+    // B received the attack; C (the eliminated manual target) did not.
+
+    await Promise.all([a.close(), b.close(), c.close()])
+  })
+
   it('forfeits a disconnected player and notifies the survivor', async () => {
     const host = await connectSimulatedClient(url, 'HOST2')
     const guest = await connectSimulatedClient(url, 'GUEST2')

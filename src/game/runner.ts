@@ -1,4 +1,5 @@
 import { Game, type GameMode, type GameOptions, type GameEvent, type TickInput } from '../engine/game'
+import type { InputAction } from '../engine/types'
 
 export const STEP_MS = 1000 / 60
 
@@ -27,6 +28,7 @@ export class GameRunner {
   readonly blitzDuration?: number
   private sprintTarget: number
   private acc = 0
+  private actionQueue: InputAction[] = []
   paused = false
   ended = false
   private opts: RunnerOpts
@@ -43,15 +45,44 @@ export class GameRunner {
     return this.game.frames * STEP_MS
   }
 
-  advance(dtMs: number, input: TickInput) {
+  /**
+   * Buffer discrete actions (rotate / hold / hard drop). They are applied on the
+   * next simulation tick and are never dropped, even if no tick ran since they
+   * were queued (e.g. displays refreshing faster than 60Hz, or a heavy frame).
+   * Pause/assist/retry are UI concerns and are ignored by the game sim.
+   */
+  queueActions(actions: InputAction[]) {
+    if (!actions.length) return
+    this.actionQueue.push(...actions)
+  }
+
+  /** Discard any buffered actions (used when pausing). */
+  clearActions() {
+    this.actionQueue.length = 0
+  }
+
+  /**
+   * Run one wall-clock frame. The simulator steps in fixed 60Hz ticks; the
+   * buffered action queue is consumed exactly once, on the first tick that runs
+   * in this call, so actions survive intermediate non-ticking frames and are
+   * never re-applied when a single call spans several ticks.
+   */
+  advance(dtMs: number, input: Omit<TickInput, 'actions'>) {
     if (this.ended || this.paused || this.game.over) return
     this.acc = Math.min(this.acc + dtMs, 200)
+    let firstTick = true
     while (this.acc >= STEP_MS && !this.ended) {
       this.acc -= STEP_MS
-      const events = this.game.tick(input)
+      const tickInput: TickInput = {
+        dir: input.dir,
+        softDrop: input.softDrop,
+        actions: firstTick ? this.actionQueue : [],
+      }
+      if (firstTick) this.actionQueue = []
+      firstTick = false
+      const events = this.game.tick(tickInput)
       if (events.length && this.opts.onEvent) this.opts.onEvent(events)
       this.checkEnd(events)
-      input.actions = []
     }
   }
 

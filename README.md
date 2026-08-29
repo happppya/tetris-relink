@@ -1,8 +1,8 @@
-# Tetris Liberation
+# Tetris Relinked
 
-[Play here.](https://happppya.github.io/tetris-liberation)
+[Play here.](https://happppya.github.io/tetris-relinked)
 
-This project aims to liberate the TETR.IO experience for all. Star the repository if you enjoyed.
+This project aims to relink fast, fair, modern Tetris for everyone. Star the repository if you enjoyed.
 
 # Usage
 
@@ -84,3 +84,4 @@ PORT=8787 npm run server
 ```
 
 Put the WebSocket service behind a TLS-enabled reverse proxy and expose it as `wss://...`; ensure the proxy supports WebSocket upgrades and forwards the configured `PORT`. The frontend must use `wss://` when served over HTTPS because browsers block insecure `ws://` connections from secure pages.
+1

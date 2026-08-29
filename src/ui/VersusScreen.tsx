@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { GameRunner, STEP_MS, type RunResult } from '../game/runner'
-import { InputManager } from '../game/input'
+import { bindInput, drainFrame } from '../game/input'
 import { BotDriver } from '../ai/botdriver'
 import { Game } from '../engine/game'
-import { useSettings, msToFrames } from '../state/settings'
+import { useSettings, handlingFromSettings } from '../state/settings'
 import { useStats } from '../state/stats'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
 import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, clearLabels } from '../render/cleartext'
 import type { GameEvent } from '../engine/game'
-import type { InputAction } from '../engine/types'
 import { formatTime, formatNum } from './format'
 import { StreakBox } from './StreakBox'
 import { GarbageMeter } from './GarbageMeter'
@@ -117,11 +116,7 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
       gameOptions: {
         sendsGarbage: true,
         attack: settings.attack,
-        handling: {
-          dasFrames: Math.max(1, msToFrames(settings.dasMs)),
-          arrFrames: msToFrames(settings.arrMs),
-          sddFrames: msToFrames(settings.sddMs),
-        },
+        handling: handlingFromSettings(settings),
       },
       onEvent: (events: GameEvent[]) => {
         const now = performance.now()
@@ -164,12 +159,7 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
       }
     }
 
-    const codeMap: Partial<Record<string, InputAction>> = {}
-    for (const [action, code] of Object.entries(settings.keybinds)) {
-      if (code) codeMap[code] = action as InputAction
-    }
-    const input = new InputManager(() => codeMap)
-    input.attach()
+    const input = bindInput(settings.keybinds)
 
     let raf = 0
     let last = performance.now()
@@ -178,20 +168,21 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
       const dt = t - last
       last = t
 
-      const actions = input.drainActions()
-      frameHadHardDrop = actions.includes('hardDrop')
-      if (actions.includes('retry')) {
+      const ctrl = drainFrame(input, playerRunner)
+      frameHadHardDrop = ctrl.hardDrop
+      if (ctrl.retry) {
         input.detach()
         setRetryKey((k) => k + 1)
         return
       }
-      if (actions.includes('pause')) {
+      if (ctrl.pause) {
         pausedLocal = !pausedLocal
         setPaused(pausedLocal)
+        if (pausedLocal) playerRunner.clearActions()
       }
 
       if (!pausedLocal && !finished) {
-        playerRunner.advance(dt, { dir: input.dir, softDrop: input.softDrop, actions })
+        playerRunner.advance(dt, { dir: input.dir, softDrop: input.softDrop })
 
         aiAcc = Math.min(aiAcc + dt, 200)
         while (aiAcc >= STEP_MS && !finished) {

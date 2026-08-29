@@ -1,6 +1,6 @@
 # Multiplayer Implementation Plan
 
-Implementation plan for migrating tetris-liberation from a fully local singleplayer app to multiplayer tetris. Companion to `notes/todo.md` (the requirement list). This file records architecture decisions, the protocol, and the phased work plan. Update it as decisions land.
+Implementation plan for migrating tetris-relinked from a fully local singleplayer app to multiplayer tetris. Companion to `notes/todo.md` (the requirement list). This file records architecture decisions, the protocol, and the phased work plan. Update it as decisions land.
 
 ## 1. Scope
 
@@ -37,24 +37,25 @@ browser (Vite app)  <--WebSocket-->  server (Node.js + ws, new server/)
 The genre standard (TETR.IO/Jstris-style):
 
 - Each client simulates its own board locally at full speed. Input → action is instant; the network never sits in the input path. This is what satisfies the low-latency requirement: only small event messages (clears, targets, snapshots) travel the wire.
-- On every lock, the client sends a `lock` event (rows cleared, spin info, combo, streak). The server computes the attack value from the room's attack table, applies it to its authoritative copy of the target's board, and relays `garbage` to the target client.
-- Clients send board snapshots on lock and at a throttled cadence (~10Hz). The server cross-checks each snapshot against its authoritative copy.
+- On every lock, the client sends a `lock` event carrying the **placed `cells`** (plus rows, spin, combo, streak). The server reconstructs the authoritative board from those cells (`server/authority.ts`), clears rows and detects invalid locks itself, computes the attack from the room's attack table, and relays `garbage` to the target client.
+- Clients send board snapshots at a throttled cadence (~10Hz) so the server can cross-check them against the authority board and relay every player's board to opponents (`board_update`).
 
-**Why not lockstep / rollback:** the engine is deterministic and fixed-timestep, so lockstep is *possible*, but lockstep delays every input by at least one RTT (perceptible in fast play) and requires all clients to tick in perfect lockstep. Rollback (GGPO-style) gives zero input delay but is substantially more complex (state journals, prediction, correction) for little gain in tetris, where each player's own board is private and only attacks cross the wire. Client-side simulation keeps local play identical to today and confines network effects to garbage arrival, which is already a queued mechanic.
+**Why not lockstep / rollback:** the engine is deterministic and fixed-timestep, so lockstep is *possible*, but lockstep delays every input by at least one RTT (perceptible in fast play) and requires all clients to tick in perfect lockstep. Rollback (GGPO-style) gives zero input delay but is substantially more complex (state journals, prediction, correction) for little gain in tetris: clients already simulate their own board locally for feel, and only small events (lock cells, garbage, snapshots) cross the wire. Client-side simulation keeps local play identical to today and confines network effects to garbage arrival, which is already a queued mechanic.
 
 ### 2.3 Desync handling
 
 Desync sources: lost/duplicated messages, client bugs, clock drift, tampering.
 
-- The server is the authority on: room settings, attack values, garbage queues, wins/eliminations, targeting, and each player's board (via snapshots).
-- Server-side per-player state: `board`, `pendingGarbage`, `score`, `wins`, `round`, `targetMode`, `manualTarget`, `attackerHistory`.
-- Detection: server compares each incoming client snapshot against its authoritative copy. Mismatch → server sends `resync` with the authoritative board + pending garbage + score + wins + round; the client applies it and play continues. No session restart.
-- Correctness rule: client and server must apply the *same* garbage rules (garbage lands on the next non-clearing placement; clears cancel incoming garbage first, surplus forwards). These rules already live in `src/engine/` and are documented in `notes/game-design.md` — the server imports the same pure engine logic so both sides cannot drift by construction.
+- The server is the authority on: room settings, attack values, garbage queues, wins/eliminations, targeting, **and every player's board**. Each `lock` must carry the placed `cells`; the server reconstructs and owns the board (`server/authority.ts`), so a real `resync` is possible on genuine divergence.
+- Server-side per-player state: `pendingGarbage`, `score`, `wins`, `round`, `targetMode`, `manualTarget`, `attackerHistory`, plus a `BoardAuthority` (the reconstructed board + incoming-garbage queue) that is the ground truth.
+- Anti-corruption rule (learned from the earlier `resync` bug, which **erased placed pieces**): a resync must only ever fire on *real* divergence against the reconstructed authority board — never a blind overwrite, which is what wiped users' stacks. A healthy client's snapshot (its own live sim matches the authority) is acknowledged; a diverged one gets a corrective `resync`. Verified by `server/message-loss.test.ts` and `server/authority.test.ts`.
+- "Wait a little, zero passthrough": incoming garbage is held in the authority's queue and, when the player next clears, that clear first cancels queued garbage; only the surplus is forwarded. If garbage is lost in transit the queued row still lands on the authority board, so the next snapshot heals the client via a real resync — nothing silently corrupts. `server/authority.test.ts` covers the cancel/zero-passthrough behavior.
+- Correctness rule: garbage is routed server-authoritatively from `lock` attacks; the *quantitative* garbage rules (lines per attack, combo/streak) live in `src/engine/attack.ts` and are shared with the server so amounts can't drift.
 - Snapshot bandwidth is trivial: 200 cells ≈ a few hundred bytes at 10Hz per player.
 
 ## 3. Protocol
 
-JSON messages over a single WebSocket. All messages carry `type`; server → client messages that must be ordered (garbage, resync) carry a `seq`. Catalog:
+JSON messages over a single WebSocket. All messages carry `type`. `garbage` must be ordered per player; `snapshot_ack` carries the client's `seq`. Catalog:
 
 | Direction | Message | Payload | Notes |
 |---|---|---|---|
@@ -77,7 +78,7 @@ JSON messages over a single WebSocket. All messages carry `type`; server → cli
 | S→C | `settings_update` | settings | broadcast to lobby |
 | S→C | `match_start` | matchId, players, settings | all clients start together (barrier on `ready`); starts round 1 |
 | S→C | `garbage` | lines, from | queued to the target |
-| S→C | `snapshot_ack` / `resync` | board, pendingGarbage, score, wins, round | resync only on mismatch |
+| S→C | `snapshot_ack` | seq | always; the server never sends a board rewrite |
 | S→C | `target_update` | playerId, mode, targetId | broadcast so icons render everywhere |
 | S→C | `game_end` | round, winnerId, eliminatedIds, wins | broadcast; interstitial + countdown |
 | S→C | `game_start` | round, players | next game begins |
@@ -162,11 +163,11 @@ Status: **Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 (server half) ✅
 - **Exit criteria**: met — 20 unit tests covering last-man-standing elimination, first-to-X, win-by-X, draws, and forfeits.
 
 ### Phase 3 — Live match sync
-- Protocol: `lock`, `snapshot`, `garbage`, `resync`, `match_start`/`ready` barrier, `match_end`.
-- Server (done): `server/session.ts` authoritative per-player state (board + score + pending garbage), attack computation from the room table (`src/engine/attack.ts`), deterministic garbage application (`shared/board.ts` — hole at column 0 so server and client can never disagree), snapshot cross-check with `resync`/`snapshot_ack`, `match_start` broadcast, `lock`/`snapshot` handlers. `server/lossyproxy.ts` simulates message loss for tests.
-- Client (pending): multiplayer game loop wired into the existing fixed-timestep runner; garbage receive; snapshot sender; resync application. Note: the client's engine garbage holes are random — aligning it to the deterministic `shared/board.ts` representation is part of this work.
-- **Exit criteria**: two clients play a full match with consistent boards; injected message loss does not permanently desync (resync recovers).
-- Tests: attack math, garbage rules, desync detection + resync, simulated message loss (server half done: `server/session.test.ts` + `server/message-loss.test.ts`).
+- Protocol: `lock` (with placed `cells`), `snapshot`, `garbage`, `snapshot_ack`, `resync`, `match_start`/`ready` barrier, `match_end`.
+- Server (done): `server/session.ts` authoritative match state (score + pending garbage + targeting + wins), `server/authority.ts` board reconstruction + garbage cancel/zero-passthrough, attack computation from the room table (`src/engine/attack.ts`), garbage routing (`lock` → target with cells), snapshot cross-check: ack on match, corrective `resync` on divergence, relay (`board_update`), `match_start` broadcast. `server/lossyproxy.ts` simulates message loss for tests.
+- Client (done): multiplayer game loop wired into the existing fixed-timestep runner; sends one authoritative lock (with cells) per placement; garbage receive; snapshot sender; applies a legitimate `resync` board so a truly diverged board is healed.
+- **Exit criteria**: two clients play a full match with consistent boards; injected message loss is healed (a dropped `garbage` surfaces on the authority board and the client is resynced, never silently corrupted) — verified: `server/message-loss.test.ts`, `server/multiclient.test.ts`, `server/authority.test.ts`.
+- Tests: attack math, garbage routing, board reconstruction + zero-passthrough (`server/authority.test.ts`), and simulated message loss (server: `server/session.test.ts` + `server/message-loss.test.ts`).
 
 ### Phase 4 — N-player view & targeting
 - Refactor `VersusScreen` → `MultiplayerScreen`: player board left, N opponent boards right with per-opponent mini-HUD; boards scale to the lobby cap.
@@ -195,6 +196,6 @@ Status: **Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 (server half) ✅
 ## 10. Testing strategy
 
 - Engine tests (Vitest, existing harness): match win conditions and round flow, garbage rules, attack math.
-- Server tests (Vitest, Node): lobby lifecycle, join codes, targeting routing, authoritative state, resync trigger. Server logic is pure TS — most tests need no sockets; keep the socket layer thin.
+- Server tests (Vitest, Node): lobby lifecycle, join codes, targeting routing, authoritative match state, board reconstruction + zero-passthrough (`server/authority.test.ts`), and resync healing (`server/message-loss.test.ts`). Server logic is pure TS — most tests need no sockets; keep the socket layer thin.
 - Integration: two WebSocket clients against one server running full matches, with a loss-injection layer to prove desync recovery.
 - Manual: two browser tabs / two machines; latency check; N-player targeting drill.

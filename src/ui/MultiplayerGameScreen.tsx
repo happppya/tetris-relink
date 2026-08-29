@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { GameRunner } from '../game/runner'
-import { InputManager } from '../game/input'
-import { useSettings, msToFrames } from '../state/settings'
+import { bindInput, drainFrame } from '../game/input'
+import { useSettings, handlingFromSettings } from '../state/settings'
 import { useLobby } from '../state/lobby'
 import { net } from '../net/connection'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
 import { GarbageMeter } from './GarbageMeter'
 import type { GameEvent } from '../engine/game'
-import type { InputAction, Cell } from '../engine/types'
-import type { ServerMessage } from '../../shared/protocol.ts'
+import { cellsFor } from '../engine/pieces'
+import { HIDDEN_H, type ActivePiece, type Cell } from '../engine/types'
+import type { LockEvent, ServerMessage } from '../../shared/protocol.ts'
 import { deserializeBoard, serializeBoard } from '../../shared/board.ts'
 
 const CELL = 30
@@ -32,38 +33,57 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
 
   useEffect(() => {
     if (!match) return
-    const selectedTargetMode = targetMode
     const ctx = canvasRef.current!.getContext('2d')!
     const nextCtx = nextRef.current!.getContext('2d')!
     let snapshotSeq = 0
     let lastSnapshot = 0
-    let lastLockPieces = 0
     let stopped = false
     let endTimer: ReturnType<typeof setTimeout> | null = null
     let raf = 0
     let last = performance.now()
+    let lastHudUpdate = 0
     let paused = false
+
+    const cellsForPiece = (piece: ActivePiece | null): { x: number; y: number }[] => {
+      if (!piece) return []
+      return cellsFor(piece.type, piece.rot)
+        .map((c) => ({ x: piece.x + c.x, y: piece.y + c.y }))
+        .filter((c) => c.y >= HIDDEN_H)
+        .map((c) => ({ x: c.x, y: c.y - HIDDEN_H }))
+    }
+    const sendLock = (lock: Omit<LockEvent, 'cells'>, piece: ActivePiece | null) => {
+      net.send({ type: 'lock', lock: { ...lock, cells: cellsForPiece(piece) } })
+    }
 
     const runner = new GameRunner({
       mode: 'versus',
       gameOptions: {
         sendsGarbage: true,
         attack: settings.attack,
-        handling: {
-          dasFrames: Math.max(1, msToFrames(settings.dasMs)),
-          arrFrames: msToFrames(settings.arrMs),
-          sddFrames: msToFrames(settings.sddMs),
-        },
+        handling: handlingFromSettings(settings),
       },
       onEvent: (events: GameEvent[]) => {
+        // Each placement reports exactly ONE lock (with the placed cells) so the
+        // server can authoritically reconstruct the board.
+        let pendingPiece: ActivePiece | null = null
         for (const ev of events) {
-          if (ev.type === 'clear') {
-            net.send({ type: 'lock', lock: { rows: ev.info.count, spin: ev.info.spin, piece: ev.info.piece, perfectClear: ev.info.perfectClear, combo: runner.game.combo - 1, b2b: ev.attack.b2b, streak: ev.attack.streakBonus } })
-          } else if (ev.type === 'lock' && runner.game.piecesPlaced > lastLockPieces) {
-            net.send({ type: 'lock', lock: { rows: 0, spin: 'none', piece: ev.piece.type, perfectClear: false, combo: runner.game.combo, b2b: runner.game.b2bActive, streak: runner.game.streak } })
+          if (ev.type === 'lock') {
+            pendingPiece = ev.piece
+          } else if (ev.type === 'clear') {
+            sendLock(
+              { rows: ev.info.count, spin: ev.info.spin, piece: ev.info.piece, perfectClear: ev.info.perfectClear, combo: runner.game.combo - 1, b2b: ev.attack.b2b, streak: ev.attack.streakBonus },
+              pendingPiece,
+            )
+            pendingPiece = null
+          } else if (ev.type === 'gameover') {
+            // report our own top-out so the server can eliminate us for the game
+            pendingPiece = null
+            net.send({ type: 'topout', matchId: match.matchId })
           }
         }
-        lastLockPieces = runner.game.piecesPlaced
+        if (pendingPiece) {
+          sendLock({ rows: 0, spin: 'none', piece: pendingPiece.type, perfectClear: false, combo: runner.game.combo, b2b: runner.game.b2bActive, streak: runner.game.streak }, pendingPiece)
+        }
       },
       onEnd: () => {},
     })
@@ -94,45 +114,47 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
         runner.game.receiveGarbage(msg.lines, false, msg.hole)
         setHud((h) => ({ ...h, incoming: runner.game.pendingGarbage }))
       } else if (msg.type === 'resync') {
+        // The server is authoritative for boards: adopt its state (plus any
+        // garbage still owed) so a genuinely-desynced client converges.
         const board = deserializeBoard(msg.board) as Cell[][]
-        const snap = runner.game.snapshot()
-        if (board.length !== 20 || board.some((row) => row.length !== 10)) {
-          setError('received invalid resync state')
-          return
+        if (board.length === 20 && board.every((row) => row.length === 10)) {
+          const snap = runner.game.snapshot()
+          runner.game.restore({ ...snap, board: [...snap.board.slice(0, HIDDEN_H), ...board], score: msg.score, garbageQueue: [] })
+          if (msg.pendingGarbage > 0) runner.game.receiveGarbage(msg.pendingGarbage, false, 0)
         }
-        runner.game.restore({ ...snap, board: [
-          ...snap.board.slice(0, snap.board.length - board.length),
-          ...board,
-        ], score: msg.score, garbageQueue: [] })
-        if (msg.pendingGarbage > 0) runner.game.receiveGarbage(msg.pendingGarbage, false, 0)
         setError(null)
       }
     })
 
-    const codeMap: Partial<Record<string, InputAction>> = {}
-    for (const [action, code] of Object.entries(settings.keybinds)) if (code) codeMap[code] = action as InputAction
-    const input = new InputManager(() => codeMap)
-    input.attach()
+    const input = bindInput(settings.keybinds)
 
     const loop = (t: number) => {
       if (stopped) return
       const dt = t - last
       last = t
-      const actions = input.drainActions()
-      if (actions.includes('pause')) paused = !paused
-      if (actions.includes('assist')) net.send({ type: 'target', mode: selectedTargetMode })
-      if (actions.includes('retry')) return
+      const ctrl = drainFrame(input, runner)
+      if (ctrl.pause) {
+        paused = !paused
+        if (paused) runner.clearActions()
+      }
+      if (ctrl.assist) net.send({ type: 'target', mode: targetMode })
+      // retry is ignored mid-match: rounds are server-authoritative and can't be
+      // restarted from the client, and returning here would kill the rAF loop
+      // and freeze all input for good
       if (!paused) {
-        runner.advance(dt, { dir: input.dir, softDrop: input.softDrop, actions })
+        runner.advance(dt, { dir: input.dir, softDrop: input.softDrop })
         const g = runner.game
         if (g.frames - lastSnapshot >= 30) {
           lastSnapshot = g.frames
           snapshotSeq++
           net.send({ type: 'snapshot', board: serializeBoard(g.board.slice(-20)), score: g.score, seq: snapshotSeq, matchId: match.matchId })
         }
-        // Locks are sent from the event stream via the same tick cadence.
-        // runner events are captured below by comparing the lock event count.
-        setHud({ score: g.score, lines: g.lines, incoming: g.pendingGarbage, latency: Math.round(net.latency) })
+        // keep React renders off the input hot path: a full re-render every frame
+        // throttles the main thread and makes inputs feel delayed/dropped
+        if (t - lastHudUpdate > 100) {
+          lastHudUpdate = t
+          setHud({ score: g.score, lines: g.lines, incoming: g.pendingGarbage, latency: Math.round(net.latency) })
+        }
       }
       const g = runner.game
       renderBoard(ctx, g.board, g.active, g.ghostPiece, { cellSize: CELL, showGhost: settings.ghost })
@@ -177,7 +199,9 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {match.players.filter((p) => p.id !== useLobby.getState().selfId).slice(0, MAX_OPPONENTS).map((p) => {
           const opponent = opponents[p.id]
-          return <button key={p.id} disabled={opponent?.left || opponent?.alive === false} onClick={() => { setTargetMode('manual'); setTargetId(p.id); net.send({ type: 'target', mode: 'manual', targetId: p.id }) }} className={`flex min-w-0 items-start gap-2 text-left disabled:opacity-40 ${targetId === p.id ? 'border border-neutral-300' : ''}`}><div className="min-w-0 flex-1"><p className="truncate text-sm text-neutral-300">{p.name}{opponent?.left ? ' · LEFT' : opponent?.alive === false ? ' · OUT' : ''}</p><p className="text-xs text-neutral-600">{opponent?.wins ?? 0}W · SCORE {opponent?.score ?? 0} · IN {opponent?.incoming ?? 0}</p></div>{opponent?.board.length === 20 && <canvas ref={(canvas) => { if (canvas) renderBoard(canvas.getContext('2d')!, opponent.board, null, null, { cellSize: OPPONENT_CELL, showGhost: false }) }} width={80} height={160} className="border border-neutral-800" />}</button>
+          const board = opponent?.board
+          const hasBoard = Array.isArray(board) && board.length === 24 && board.every((row) => Array.isArray(row) && row.length === 10)
+          return <button key={p.id} disabled={opponent?.left || opponent?.alive === false} onClick={() => { setTargetMode('manual'); setTargetId(p.id); net.send({ type: 'target', mode: 'manual', targetId: p.id }) }} className={`relative flex min-w-0 items-start gap-2 text-left disabled:opacity-40 ${targetId === p.id ? 'border border-neutral-300' : ''}`}><div className="min-w-0 flex-1"><p className="truncate text-sm text-neutral-300">{p.name}{opponent?.left ? ' · LEFT' : opponent?.alive === false ? ' · OUT' : ''}</p><p className="text-xs text-neutral-600">{opponent?.wins ?? 0}W · SCORE {opponent?.score ?? 0} · IN {opponent?.incoming ?? 0}</p></div>{hasBoard && <canvas ref={(canvas) => { if (!canvas) return; const current = opponents[p.id]?.board; if (Array.isArray(current) && current.length === 24 && current.every((row) => Array.isArray(row) && row.length === 10)) renderBoard(canvas.getContext('2d')!, current, null, null, { cellSize: OPPONENT_CELL, showGhost: false }) }} width={80} height={160} className="border border-neutral-800" />}{targetId === p.id && <span aria-label="targeted" className="absolute right-0 top-0 text-xs text-red-400">⌖</span>}</button>
         })}
         </div>
         {error && <p className="mt-4 text-xs text-red-400">{error}</p>}

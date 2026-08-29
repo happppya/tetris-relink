@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { InputAction } from '../engine/types'
+import type { HandlingConfig } from '../engine/game'
 import { DEFAULT_ATTACK, type AttackConfig } from '../engine/attack'
 import { DEFAULT_SCORING, type ScoringConfig } from '../engine/scoring'
 import { BOT_PROFILES } from '../ai/profiles'
@@ -31,6 +32,15 @@ export interface Settings {
 export const FRAMES_PER_MS = 60 / 1000
 
 export const msToFrames = (ms: number) => Math.max(0, Math.round(ms * FRAMES_PER_MS))
+
+/** Maps DAS/ARR/SDF timings (ms) to the 60Hz frame counts the engine expects. */
+export function handlingFromSettings(s: Pick<Settings, 'dasMs' | 'arrMs' | 'sddMs'>): HandlingConfig {
+  return {
+    dasFrames: Math.max(1, msToFrames(s.dasMs)),
+    arrFrames: msToFrames(s.arrMs),
+    sddFrames: msToFrames(s.sddMs),
+  }
+}
 
 export const ACTION_LABELS: Record<InputAction, string> = {
   moveLeft: 'Move left',

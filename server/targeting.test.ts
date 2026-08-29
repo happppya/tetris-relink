@@ -32,4 +32,50 @@ describe('session targeting', () => {
     expect(session.setTarget('a', 'manual', 'a')[0]).toMatchObject({ targetId: 'b' })
     expect(session.setTarget('a', 'manual', 'missing')[0]).toMatchObject({ targetId: 'b' })
   })
+
+  it('never targets an eliminated/out-of-game player', () => {
+    const session = new Session('m', members, settings)
+    session.eliminate('b')
+    // random mode routes only among living opponents
+    expect(garbageTo(session.move('a', lock))).toMatchObject({ to: 'c' })
+  })
+
+  it('reassigns a manual target that was eliminated instead of hitting them', () => {
+    const session = new Session('m', members, settings)
+    session.eliminate('c')
+    const [update] = session.setTarget('a', 'manual', 'c')
+    expect(update.targetId).toBe('b')
+    expect(garbageTo(session.move('a', lock))).toMatchObject({ to: 'b' })
+  })
+
+  it('falls back away from an eliminated revenge attacker to a living opponent', () => {
+    const session = new Session('m', members, settings)
+    session.move('b', lock) // b attacks a -> a's most recent attacker is b
+    session.eliminate('b')
+    session.setTarget('a', 'revenge')
+    // b is out of the game, so revenge must not route back to it
+    expect(garbageTo(session.move('a', lock))).toMatchObject({ to: 'c' })
+  })
+
+  it('routes to no one when every potential target is eliminated', () => {
+    const session = new Session('m', members, settings)
+    session.eliminate('b')
+    session.eliminate('c')
+    expect(garbageTo(session.move('a', lock))).toBeUndefined()
+  })
+
+  it('newGame re-enables everyone and resets targeting state', () => {
+    const session = new Session('m', members, settings)
+    session.move('c', lock) // a's most recent attacker is c
+    session.setTarget('a', 'revenge')
+    expect(garbageTo(session.move('a', lock))).toMatchObject({ to: 'c' }) // revenge -> c
+    session.eliminate('b')
+    session.eliminate('c')
+    expect(garbageTo(session.move('a', lock))).toBeUndefined() // no living opponents
+
+    session.newGame() // a fresh game starts
+
+    // everyone is eligible again and the mode fell back to random (first living)
+    expect(garbageTo(session.move('a', lock))).toMatchObject({ to: 'b' })
+  })
 })

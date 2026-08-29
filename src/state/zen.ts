@@ -12,8 +12,6 @@ export interface ZenSettings {
   assist: boolean
   hintCount: number
   assistProfile: string
-  /** selected practice drill id, or null for free play */
-  drill: string | null
 }
 
 export const DEFAULT_ZEN_SETTINGS: ZenSettings = {
@@ -24,7 +22,6 @@ export const DEFAULT_ZEN_SETTINGS: ZenSettings = {
   assist: false,
   hintCount: 2,
   assistProfile: 'optimal',
-  drill: null,
 }
 
 export const ZEN_BASE_XP = 5000

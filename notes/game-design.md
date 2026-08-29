@@ -1,6 +1,6 @@
 # Game Design Notes
 
-Reference for modern Tetris guideline mechanics as implemented in tetris-liberation.
+Reference for modern Tetris guideline mechanics as implemented in tetris-relinked.
 
 ## Playfield & pieces
 

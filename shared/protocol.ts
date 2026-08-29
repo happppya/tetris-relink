@@ -5,7 +5,11 @@ export type Visibility = 'public' | 'private'
 export type SpinKind = 'none' | 'mini' | 'full'
 export type TargetMode = 'manual' | 'revenge' | 'random'
 
-/** A piece placement reported to the server (computed attack is server-side). */
+/**
+ * A piece placement reported to the server. `cells` are the placed mino
+ * positions in visible-board coordinates (0..19); the server reconstructs the
+ * board from them to be authoritative.
+ */
 export interface LockEvent {
   rows: number
   spin: SpinKind
@@ -14,6 +18,7 @@ export interface LockEvent {
   combo: number
   b2b: boolean
   streak: number
+  cells?: { x: number; y: number }[]
 }
 
 /** Serialized board (see shared/board.ts). */

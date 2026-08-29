@@ -1,7 +1,7 @@
 # Practice & Learning Design
 
 Ideas and roadmap for the practice tools: how players learn openers, stacking concepts,
-and spin placement in tetris-liberation. Companion to `todo.md` (requirements) and
+and spin placement in tetris-relinked. Companion to `todo.md` (requirements) and
 `architecture.md` (module layout).
 
 ## Shipped (v1)

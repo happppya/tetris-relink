@@ -1,6 +1,6 @@
 # Tech Stack
 
-Decision record for the tetris-liberation tech stack. Update this file when a decision changes.
+Decision record for the tetris-relinked tech stack. Update this file when a decision changes.
 
 ## Chosen stack
 

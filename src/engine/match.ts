@@ -18,7 +18,7 @@ export type MatchEvent =
   | { type: 'eliminated'; playerId: string; reason: EliminationReason; alive: number }
   | { type: 'game_won'; round: number; winnerId: string; wins: Record<string, number> }
   | { type: 'game_draw'; round: number }
-  | { type: 'match_won'; round: number; winnerId: string; wins: Record<string, number> }
+  | { type: 'match_won'; round: number; winnerId: string | null; wins: Record<string, number> }
 
 export type MatchStatus = 'active' | 'finished'
 
@@ -93,6 +93,26 @@ export class Match {
   }
 
   /**
+   * A player leaves permanently (e.g. disconnect). They forfeit the current game
+   * and are removed from the roster for good, so they are not revived by later
+   * round resets. If they were the last other player, the remaining player wins
+   * the match; if nobody is left, the match ends with no winner.
+   */
+  removePlayer(playerId: string): MatchEvent[] {
+    if (this.status === 'finished') return []
+    const p = this.players.get(playerId)
+    if (!p) return []
+    const events: MatchEvent[] = []
+    if (p.alive) {
+      p.alive = false
+      events.push({ type: 'eliminated', playerId, reason: 'forfeit', alive: this.aliveCount })
+    }
+    this.players.delete(playerId)
+    this.resolve(events)
+    return events
+  }
+
+  /**
    * Several players top out in the same tick. If every remaining player tops
    * out together there is no survivor: the game is a draw, no win is awarded,
    * and it is replayed.
@@ -114,6 +134,13 @@ export class Match {
     if (this.status === 'finished') return
     const alive = this.alivePlayerIds()
     if (alive.length === 0) {
+      if (this.players.size === 0) {
+        // every player left: nothing to award
+        this.status = 'finished'
+        this.winnerId = null
+        events.push({ type: 'match_won', round: this.round, winnerId: null, wins: this.wins() })
+        return
+      }
       this.lastGameDraw = true
       this.lastGameWinnerId = null
       events.push({ type: 'game_draw', round: this.round })
@@ -126,7 +153,10 @@ export class Match {
       this.lastGameDraw = false
       this.lastGameWinnerId = survivor.id
       events.push({ type: 'game_won', round: this.round, winnerId: survivor.id, wins: this.wins() })
-      if (this.isMatchOver()) {
+      // once a single player remains in the roster, they own the match — for
+      // example when every opponent has disconnected, so there is no one left
+      // to reach the goal against
+      if (this.players.size === 1 || this.isMatchOver()) {
         this.status = 'finished'
         this.winnerId = survivor.id
         events.push({ type: 'match_won', round: this.round, winnerId: survivor.id, wins: this.wins() })

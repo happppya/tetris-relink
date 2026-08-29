@@ -21,9 +21,9 @@ export function MainMenu({ onMode, onZen, onSettings, onStats, onMultiplayer }: 
     blitzBest[dur] === null ? 'score' : `best ${blitzBest[dur]!.toLocaleString()}`
 
   return (
-    <main className="flex min-h-screen items-center justify-center">
+    <main className="flex min-h-screen items-center justify-center gap-16">
       <MenuList
-        title="TETRIS LIBERATION"
+        title="TETRIS RELINKED"
         items={[
           {
             label: '40 LINES',
@@ -40,6 +40,24 @@ export function MainMenu({ onMode, onZen, onSettings, onStats, onMultiplayer }: 
           { label: 'STATS', onSelect: onStats },
         ]}
       />
+      <aside className="max-w-xs text-sm leading-relaxed text-neutral-400">
+        <p className="mb-3">
+          Tetris relinked is a simple online multiplayer tetris website inspired by the modern features of
+          TETR.IO but made open-source.
+        </p>
+        <p className="mb-3">
+          Make sure to star the repository if you enjoyed playing:{' '}
+          <a
+            href="https://github.com/happppya/tetris-relink"
+            target="_blank"
+            rel="noreferrer"
+            className="text-neutral-200 underline hover:text-white"
+          >
+            github.com/happppya/tetris-relink
+          </a>
+        </p>
+        <p>PRs and suggestions are welcome.</p>
+      </aside>
     </main>
   )
 }
