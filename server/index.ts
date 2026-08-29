@@ -247,8 +247,14 @@ export function startServer(port: number): ServerHandle {
       }
       if (events.length) emitMatchEvents(entry, events)
     }
+    // when an elimination ALSO resolves the round (game_won/draw in the same
+    // batch) the game_won/game_draw game_end already conveys the round over;
+    // broadcasting the standalone eliminated game_end too would announce a
+    // round end twice per death ("the player dying over and over"). Only the
+    // ongoing N>2 case (death without a round resolution) gets its own game_end.
+    const roundEndsInBatch = events.some((e) => e.type === 'game_won' || e.type === 'game_draw')
     for (const event of events) {
-      if (event.type === 'eliminated' && event.alive > 0) sendToLobby(lobby, { type: 'game_end', round: entry.match.match.round, winnerId: null, eliminatedIds: [event.playerId], wins: entry.match.match.wins(), scores: entry.match.session.scores() })
+      if (event.type === 'eliminated' && event.alive > 0 && !roundEndsInBatch) sendToLobby(lobby, { type: 'game_end', round: entry.match.match.round, winnerId: null, eliminatedIds: [event.playerId], wins: entry.match.match.wins(), scores: entry.match.session.scores() })
       if (event.type === 'game_won') {
         // scores() must be read before startNextGame resets the round scores
         sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: event.winnerId, eliminatedIds: [], wins: event.wins, scores: entry.match.session.scores() })

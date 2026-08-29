@@ -1,5 +1,5 @@
 import type { Game, GameEvent } from '../engine/game'
-import { HIDDEN_H, type ActivePiece, type Cell, type PieceType } from '../engine/types'
+import { BOARD_W, HIDDEN_H, type ActivePiece, type Cell, type PieceType } from '../engine/types'
 import { cellsFor } from '../engine/pieces'
 import { deserializeBoard, serializeBoard } from '../../shared/board.ts'
 import type { ClientMessage, LockEvent, ServerMessage, TargetMode } from '../../shared/protocol.ts'
@@ -253,9 +253,23 @@ export class MatchClient {
         const board = deserializeBoard(msg.board) as Cell[][]
         if (board.length === 20 && board.every((row) => row.length === 10)) {
           const snap = this.game.snapshot()
+          // a fresh round is a brand-new board: prepend clean hidden rows (empty,
+          // walled only in four-wide) instead of carrying the previous round's
+          // hidden rows over. A topped-out board has blocks piled into the hidden
+          // top rows, so reusing them made the revived player's spawn collide
+          // with residual blocks and instantly top out again every round.
+          const walled = board[0]?.[0] === 'W'
+          const hidden: Cell[][] = Array.from({ length: HIDDEN_H }, () => {
+            const row: Cell[] = Array<Cell>(BOARD_W).fill(null)
+            if (walled) {
+              for (let x = 0; x < 3; x++) row[x] = 'W'
+              for (let x = BOARD_W - 3; x < BOARD_W; x++) row[x] = 'W'
+            }
+            return row
+          })
           this.game.restore({
             ...snap,
-            board: [...snap.board.slice(0, HIDDEN_H), ...board],
+            board: [...hidden, ...board],
             score: 0,
             lines: 0,
             piecesPlaced: 0,
@@ -269,6 +283,11 @@ export class MatchClient {
             b2bActive: false,
           })
         }
+        // a fresh round resets the engine's frame clock to 0, so the snapshot
+        // clock must follow or the revived player's first relay is throttled by
+        // the previous round's frame count (frames reset but lastSnapshot didn't)
+        this.lastSnapshot = 0
+        this.snapshotSeq = 0
         this.setState({ round: msg.round, error: null, opponents: {} })
         break
       }

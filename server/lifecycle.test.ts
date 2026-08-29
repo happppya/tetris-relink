@@ -30,7 +30,9 @@ describe('match lifecycle over WebSockets', () => {
     const gameEnd = guest.waitFor('game_end')
     const matchEnd = guest.waitFor('match_end')
     guest.send({ type: 'topout', matchId: match.matchId })
-    expect(await gameEnd).toMatchObject({ winnerId: null, eliminatedIds: [match.players[1].id] })
+    // a round-ending death resolves the round in one broadcast: the survivor's
+    // game_end (the eliminated-only broadcast is reserved for ongoing N>2 deaths)
+    expect(await gameEnd).toMatchObject({ winnerId: match.players[0].id, eliminatedIds: [], wins: { [match.players[0].id]: 1 } })
     expect(await matchEnd).toMatchObject({ winnerId: match.players[0].id, wins: { [match.players[0].id]: 1 } })
     await host.close(); await guest.close()
   })
