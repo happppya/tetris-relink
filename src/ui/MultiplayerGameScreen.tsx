@@ -6,6 +6,7 @@ import { useLobby } from '../state/lobby'
 import { net } from '../net/connection'
 import { MatchClient, type Intermission, type OpponentState } from '../net/match-client'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
+import { SpectatorBoard } from './SpectatorBoard'
 import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, SendPopupRenderer, clearLabels } from '../render/cleartext'
 import { GarbageMeter } from './GarbageMeter'
@@ -133,17 +134,7 @@ function SpectatorPanel({ player, opp, cell }: { player: LobbyPlayer; opp: Oppon
         </div>
       </aside>
       <div className="flex items-start">
-        <canvas
-          ref={(canvas) => {
-            if (!canvas) return
-            const current = opp?.board
-            if (Array.isArray(current) && current.length === 20 && current.every((row) => Array.isArray(row) && row.length === 10))
-              renderBoard(canvas.getContext('2d')!, current, null, null, { cellSize: cell, showGhost: false })
-          }}
-          width={10 * cell}
-          height={20 * cell}
-          className="border border-neutral-800"
-        />
+        <SpectatorBoard board={opp?.board ?? null} cell={cell} detail="full" />
         <div className="ml-1">
           <GarbageMeter amount={opp?.incoming ?? 0} height={20 * cell} />
         </div>
@@ -410,22 +401,22 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
         {watched.length <= 2 ? (
           <div className="flex items-start gap-8">
             {watched.map((p) => (
-              <SpectatorPanel key={p.id} player={p} opp={opponents[p.id]} cell={aiCell} />
+              // keyed by round so each round starts with clean per-board fx
+              <SpectatorPanel key={`${p.id}-${round}`} player={p} opp={opponents[p.id]} cell={aiCell} />
             ))}
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {watched.map((p) => {
               const opp = opponents[p.id]
-              const hasBoard = Array.isArray(opp?.board) && opp.board.length === 20 && opp.board.every((row) => Array.isArray(row) && row.length === 10)
               return (
-                <div key={p.id} className="flex min-w-0 flex-col items-start gap-1 border border-neutral-900 p-2">
+                <div key={`${p.id}-${round}`} className="flex min-w-0 flex-col items-start gap-1 border border-neutral-900 p-2">
                   <p className="w-full truncate text-sm text-neutral-300">
                     {p.name}
                     {statusLabel(opp)}
                   </p>
                   <div className="flex items-start gap-1">
-                    {hasBoard && <canvas ref={(canvas) => { if (!canvas) return; const current = opponents[p.id]?.board; if (Array.isArray(current) && current.length === 20 && current.every((row) => Array.isArray(row) && row.length === 10)) renderBoard(canvas.getContext('2d')!, current, null, null, { cellSize: OPPONENT_CELL, showGhost: false }) }} width={80} height={160} className="border border-neutral-800" />}
+                    <SpectatorBoard board={opp?.board ?? null} cell={OPPONENT_CELL} detail="reduced" />
                     <GarbageMeter amount={opp?.incoming ?? 0} height={160} />
                   </div>
                 </div>
