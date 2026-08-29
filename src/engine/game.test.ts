@@ -344,6 +344,28 @@ describe('Garbage timing & cancellation', () => {
     expect(countGarbageRows(game)).toBe(3)
   })
 
+  it('clear events report the lines actually sent after cancellation', () => {
+    const game = new Game({ seed: 9, sendsGarbage: true, attack: { single: 5 } })
+    game.receiveGarbage(2)
+    const clear = forceSingleClear(game).find(
+      (e): e is Extract<GameEvent, { type: 'clear' }> => e.type === 'clear',
+    )
+    expect(clear?.sent).toBe(3) // 2 lines cancelled, 3 forwarded
+    expect(game.pendingGarbage).toBe(0)
+  })
+
+  it('backfire-style cancellable garbage is fully cleared by a matching clear', () => {
+    const game = new Game({ seed: 9, sendsGarbage: true, attack: { single: 4 } })
+    game.receiveGarbage(4) // backfire queued from an earlier clear
+    const clear = forceSingleClear(game).find(
+      (e): e is Extract<GameEvent, { type: 'clear' }> => e.type === 'clear',
+    )
+    // the whole attack was consumed cancelling; nothing surplus to send back
+    expect(clear?.sent).toBe(0)
+    game.receiveGarbage(Math.round(clear!.sent * 1)) // zen backfire re-queues surplus
+    expect(game.pendingGarbage).toBe(0)
+  })
+
   it('garbage still applies on a placement without a clear', () => {
     const game = new Game({ seed: 9, sendsGarbage: true })
     game.receiveGarbage(3)
@@ -421,6 +443,36 @@ describe('Garbage timing & cancellation', () => {
     for (let y = TOTAL_H - 3; y < TOTAL_H; y++) {
       expect(game.board[y].filter((c) => c === 'G').length).toBe(BOARD_W - 1)
     }
+  })
+})
+
+describe('Gravity level 0 (zen zero gravity)', () => {
+  it('keeps the piece from falling on its own', () => {
+    const game = new Game({ seed: 3, startLevel: 1, gravityLevel: 0 })
+    const startY = game.active!.y
+    for (let i = 0; i < 600; i++) game.tick({ dir: 0, softDrop: false, actions: [] })
+    expect(game.active!.y).toBe(startY)
+  })
+
+  it('still falls while soft drop is held', () => {
+    const game = new Game({
+      seed: 3,
+      startLevel: 1,
+      gravityLevel: 0,
+      handling: { dasFrames: 8, arrFrames: 2, sddFrames: 5 },
+    })
+    const startY = game.active!.y
+    for (let i = 0; i < 20; i++) game.tick({ dir: 0, softDrop: true, actions: [] })
+    expect(game.active!.y).toBeGreaterThan(startY)
+  })
+
+  it('scores clears at level 1 despite zero gravity', () => {
+    const game = new Game({ seed: 9, startLevel: 1, gravityLevel: 0 })
+    for (let x = 0; x < BOARD_W; x++) if (x !== 7) game.board[TOTAL_H - 1][x] = 'J'
+    game.active = { type: 'I', rot: 1, x: 5, y: 3 }
+    const events = game.tick({ dir: 0, softDrop: false, actions: ['hardDrop'] })
+    const clear = events.find((e): e is Extract<GameEvent, { type: 'clear' }> => e.type === 'clear')
+    expect(clear?.scoreGained).toBe(100)
   })
 })
 

@@ -14,6 +14,7 @@ const CLEAR_SCORES = [100, 300, 500, 800]
 const TSPIN_SCORES = [800, 1200, 1600]
 
 export function gravitySecondsPerRow(level: number): number {
+  if (level <= 0) return Number.POSITIVE_INFINITY // level 0 = no natural gravity
   return Math.pow(0.8 - (level - 1) * 0.007, level - 1)
 }
 

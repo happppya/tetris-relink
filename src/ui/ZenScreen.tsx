@@ -53,7 +53,7 @@ function ModeButton({
 
 const GARBAGE_MODES: { id: GarbageMode; label: string; hint: string }[] = [
   { id: 'none', label: 'NONE', hint: 'no garbage' },
-  { id: 'backfire', label: 'BACKFIRE', hint: 'attacks return after next placement (ignores cancelling)' },
+  { id: 'backfire', label: 'BACKFIRE', hint: 'surplus attacks return after next placement (cancellable)' },
   { id: 'unclear', label: 'UNCLEAR', hint: 'attacks return instantly' },
   { id: 'cheese', label: 'CHEESE LAYER', hint: 'bottom rows stay filled with garbage' },
 ]
@@ -132,7 +132,9 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
     const runner = new GameRunner({
       mode: 'zen',
       gameOptions: {
-        startLevel: zenSettings.gravityLevel,
+        // scoring stays at level >= 1 so zero-gravity clears still score
+        startLevel: Math.max(1, zenSettings.gravityLevel),
+        gravityLevel: zenSettings.gravityLevel,
         attack: settings.attack,
         scoring: settings.scoring,
         cheeseRows: zenSettings.garbage === 'cheese' ? CHEESE_ROWS : 0,
@@ -147,7 +149,9 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
             if (settings.fx.sendPopups) sendPopups.push(ev.attack, runner.game.combo, now, ev.rows, ev.pieceX, CELL)
             fx.lineClear(ev.rows, CELL, ev.info, ev.attack, runner.game.combo)
             if (zenRef.current.garbage === 'backfire') {
-              runner.game.receiveGarbage(Math.round(ev.attack.totalLines * zenRef.current.multiplier), true)
+              // only the surplus attack (after cancelling pending garbage) comes
+              // back, and it is cancellable like any incoming garbage
+              runner.game.receiveGarbage(Math.round(ev.sent * zenRef.current.multiplier))
             } else if (zenRef.current.garbage === 'unclear') {
               runner.game.receiveGarbageNow(Math.round(ev.attack.totalLines * zenRef.current.multiplier))
             }
@@ -433,7 +437,10 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
 
   const onGravity = (v: number) => {
     updateZen({ gravityLevel: v })
-    if (gameRef.current) gameRef.current.level = v
+    if (gameRef.current) {
+      gameRef.current.gravityLevel = v
+      gameRef.current.level = Math.max(1, v)
+    }
   }
 
   useEffect(() => {
@@ -516,14 +523,19 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
             <div className="flex items-center gap-2">
               <input
                 type="range"
-                min={1}
+                min={0}
                 max={19}
                 value={zenSettings.gravityLevel}
                 onChange={(e) => onGravity(Number(e.target.value))}
                 className="w-32 accent-neutral-300"
               />
-              <span className="w-8 text-right text-xs text-neutral-200">{zenSettings.gravityLevel}</span>
+              <span className="w-10 text-right text-xs text-neutral-200">
+                {zenSettings.gravityLevel === 0 ? 'OFF' : zenSettings.gravityLevel}
+              </span>
             </div>
+            {zenSettings.gravityLevel === 0 && (
+              <p className="mt-1 text-[10px] text-neutral-600">0 = no natural gravity; soft/hard drop only</p>
+            )}
           </section>
 
           <section className="mb-6">

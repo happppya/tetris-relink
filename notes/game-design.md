@@ -111,11 +111,11 @@ The AI's speed is adjustable in two ways:
 
 Endless practice mode with an in-game settings sidebar and persistent progression.
 
-- **Gravity**: adjustable level 1-19, applies live to the running game.
+- **Gravity**: adjustable level 0-19, applies live to the running game. Level 0 disables natural gravity entirely (the piece only moves via soft/hard drop); scoring uses level 1 in that case so clears still score.
 - **Practice mode**: Ctrl+Z / Ctrl+Y undo/redo of placements via engine snapshots (board, hold, score, bag queue and RNG state).
 - **Garbage** (select one, default *none*):
   - *None*: no garbage.
-  - *Backfire* (0.5x / 1x / 2x): your attack lines are multiplied and queued back into your board after a placement without a clear; backfire ignores garbage cancelling.
+  - *Backfire* (0.5x / 1x / 2x): your attack lines are multiplied and queued back into your board after a placement without a clear; only the surplus attack (the lines actually sent after cancelling pending garbage) comes back, and it can be cancelled by later clears.
   - *Unclear* (0.5x / 1x / 2x): multiplied attack lines are pushed into your board instantly on clear.
   - *Cheese layer*: the bottom 6 rows are always garbage lines with one random hole each; holes stay stable while a row remains cheese, and rows eaten by clears regenerate as fresh cheese.
 - A thin red meter beside the board shows pending incoming garbage.

@@ -89,7 +89,7 @@ export function buildPlacementScript(
   opts: { pps: number; handling?: Partial<HandlingConfig> },
   plan: BotPlanMsg,
 ): ScriptStep[] {
-  const scratch = new Game({ seed: 0, startLevel: game.level, handling: opts.handling })
+  const scratch = new Game({ seed: 0, startLevel: game.level, gravityLevel: game.gravityLevel, handling: opts.handling })
   if (!game.active || game.over) return []
   const target = Math.max(3, Math.round(60 / Math.min(20, Math.max(0.05, opts.pps))))
 
@@ -99,7 +99,7 @@ export function buildPlacementScript(
   // The idle frames are simulated in the scratch game so the search plans
   // from wherever the piece will actually be once execution starts.
   const estLen = Math.abs(plan.x - game.active.x) + 5
-  const airFrames = Math.round(ghostRows(game) * gravitySecondsPerRow(game.level) * 60)
+  const airFrames = Math.round(ghostRows(game) * gravitySecondsPerRow(game.gravityLevel) * 60)
   let pad = Math.max(
     0,
     Math.min(target - estLen - 1, airFrames + LOCK_DELAY_FRAMES - estLen - 4),
@@ -140,7 +140,7 @@ export function buildPlacementScript(
   let root: SearchNode = { snap: paddedSnap, step: null, prev: null }
   if (plan.hold) {
     // perform the swap first; the BFS then steers the held piece onto the plan
-    const scratchHold = new Game({ seed: 0, startLevel: game.level, handling: opts.handling })
+    const scratchHold = new Game({ seed: 0, startLevel: game.level, gravityLevel: game.gravityLevel, handling: opts.handling })
     scratchHold.restore(root.snap)
     scratchHold.tick({ dir: 0, softDrop: false, actions: ['hold'] })
     if (scratchHold.active && !scratchHold.over) {

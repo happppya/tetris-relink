@@ -37,7 +37,7 @@ export type GameEvent =
   | { type: 'move' }
   | { type: 'rotate'; kickIndex: number }
   | { type: 'lock'; piece: ActivePiece; row: number }
-  | { type: 'clear'; info: ClearInfo; attack: AttackResult; scoreGained: number; rows: number[]; pieceX: number }
+  | { type: 'clear'; info: ClearInfo; attack: AttackResult; scoreGained: number; rows: number[]; pieceX: number; sent: number }
   | { type: 'hold'; piece: PieceType | null }
   | { type: 'garbage'; rows: number }
   | { type: 'attack'; lines: number }
@@ -53,6 +53,7 @@ export interface GameSnapshot {
   score: number
   lines: number
   level: number
+  gravityLevel: number
   combo: number
   streak: number
   b2bActive: boolean
@@ -80,6 +81,8 @@ export interface GameOptions {
   attack?: Partial<AttackConfig>
   scoring?: Partial<ScoringConfig>
   startLevel?: number
+  /** gravity curve level, separate from the scoring level; defaults to startLevel. 0 = no natural gravity (zen) */
+  gravityLevel?: number
   sendsGarbage?: boolean
   mode?: GameMode
   cheeseRows?: number
@@ -162,6 +165,8 @@ export class Game {
   score = 0
   lines = 0
   level: number
+  /** gravity curve level; 0 means the piece never falls on its own */
+  gravityLevel: number
   combo = 0
   streak = 0
   b2bActive = false
@@ -213,6 +218,7 @@ export class Game {
     this.attackCfg = { ...DEFAULT_ATTACK, ...opts.attack }
     this.scoringCfg = { ...DEFAULT_SCORING, ...opts.scoring }
     this.level = opts.startLevel ?? 1
+    this.gravityLevel = opts.gravityLevel ?? opts.startLevel ?? 1
     this.sendsGarbage = opts.sendsGarbage ?? false
     this.mode = opts.mode ?? 'marathon'
     this.active = this.spawnNext()
@@ -255,6 +261,7 @@ export class Game {
       score: this.score,
       lines: this.lines,
       level: this.level,
+      gravityLevel: this.gravityLevel,
       combo: this.combo,
       streak: this.streak,
       b2bActive: this.b2bActive,
@@ -285,6 +292,7 @@ export class Game {
     this.score = snap.score
     this.lines = snap.lines
     this.level = snap.level
+    this.gravityLevel = snap.gravityLevel
     this.combo = snap.combo
     this.streak = snap.streak
     this.b2bActive = snap.b2bActive
@@ -345,7 +353,7 @@ export class Game {
           this.onDescend(moved.y)
         }
       } else {
-        const rate = 1 / 60 / gravitySecondsPerRow(this.level)
+        const rate = 1 / 60 / gravitySecondsPerRow(this.gravityLevel)
         this.gravAcc += rate
         while (this.gravAcc >= 1 && this.active) {
           this.gravAcc--
@@ -527,7 +535,7 @@ export class Game {
       scoreGained = Math.round(scoreGained)
       this.score += scoreGained
 
-      events.push({ type: 'clear', info, attack, scoreGained, rows: fullRows, pieceX: piece.x })
+      events.push({ type: 'clear', info, attack, scoreGained, rows: fullRows, pieceX: piece.x, sent: remainder })
     } else {
       this.combo = 0
       // non-clearing placements do not break the streak
