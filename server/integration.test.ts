@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
 import type { AddressInfo } from 'node:net'
-import { startServer, type ServerHandle } from './index.ts'
+import { setReconnectGraceMs, startServer, type ServerHandle } from './index.ts'
 import type { ClientMessage, LobbyPlayer, LobbyState, ServerMessage } from '../shared/protocol.ts'
 
 const lobbyStateOf = (m: ServerMessage): LobbyState => (m as { type: 'lobby_state'; lobby: LobbyState }).lobby
@@ -129,29 +129,43 @@ describe('lobby flows over real WebSockets', () => {
     guest.close()
   })
 
-  it('transfers host on disconnect and destroys the lobby when empty', async () => {
+  it('buffers a disconnected host, transfers host after the grace period, and destroys the lobby when empty', async () => {
+    const prev = setReconnectGraceMs(120)
     const host = await connectClient('HOST2')
     const guest = await connectClient('GUEST2')
 
-    const stateP = host.waitFor('lobby_state')
-    host.send({ type: 'create_lobby', name: 'HOST2', visibility: 'private', settings: { mode: 'firstToX', goal: 7, winBy: 2 } })
-    const state = lobbyStateOf(await stateP)
-    const guestStateP = guest.waitFor('lobby_state')
-    guest.send({ type: 'join_lobby', code: state.code })
-    await guestStateP
+    try {
+      const stateP = host.waitFor('lobby_state')
+      host.send({ type: 'create_lobby', name: 'HOST2', visibility: 'private', settings: { mode: 'firstToX', goal: 7, winBy: 2 } })
+      const state = lobbyStateOf(await stateP)
+      const guestStateP = guest.waitFor('lobby_state')
+      guest.send({ type: 'join_lobby', code: state.code })
+      await guestStateP
 
-    const promotedP = guest.waitFor('error')
-    const rosterP = guest.waitFor('roster_update')
-    host.close()
-    const promoted = await promotedP
-    expect(codeOf(promoted)).toBe('host_transferred')
-    const roster = rosterOf(await rosterP)
-    expect(roster.players[0].isHost).toBe(true)
-    expect(roster.hostId).toBe(roster.players[0].id)
+      // the host drops its socket: kept (reconnecting) for the grace period, so
+      // the host role is NOT transferred yet — they could come back
+      const reconnectingP = guest.waitFor('roster_update')
+      host.close()
+      const reconnecting = rosterOf(await reconnectingP)
+      expect(reconnecting.players.find((p) => p.name === 'HOST2')!.reconnecting).toBe(true)
+      expect(reconnecting.hostId).toBe(reconnecting.players.find((p) => p.name === 'HOST2')!.id)
 
-    guest.close()
-    await sleep(50)
-    expect(handle.registry.all()).toHaveLength(0)
+      // once the grace period runs out the host is pruned and the role transfers
+      const promotedP = guest.waitFor('error')
+      const rosterP = guest.waitFor('roster_update')
+      const promoted = await promotedP
+      expect(codeOf(promoted)).toBe('host_transferred')
+      const roster = rosterOf(await rosterP)
+      expect(roster.players[0].isHost).toBe(true)
+      expect(roster.hostId).toBe(roster.players[0].id)
+
+      // the remaining guest closing also buffers, then the lobby is destroyed
+      guest.close()
+      await sleep(300)
+      expect(handle.registry.all()).toHaveLength(0)
+    } finally {
+      setReconnectGraceMs(prev)
+    }
   })
 
   it('rejects joining a nonexistent or full lobby', async () => {

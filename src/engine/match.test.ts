@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Match, type MatchEvent, type MatchSettings } from './match'
+import { isMatchPoint } from '../../shared/lobby-settings.ts'
 
 const ft = (goal: number): MatchSettings => ({ mode: 'firstToX', goal, winBy: 2 })
 const wb = (winBy: number): MatchSettings => ({ mode: 'winByX', goal: 99, winBy })
@@ -201,6 +202,35 @@ describe('draws', () => {
   })
 })
 
+describe('spectating', () => {
+  it('a spectator sits out the current game without resolving it', () => {
+    const m = new Match(ft(7), ['a', 'b', 'c'])
+    // switching to spectate marks the player dead but fires NO events: the
+    // game continues among the remaining players
+    expect(m.spectate('b')).toEqual([])
+    expect(m.aliveCount).toBe(2)
+    expect(m.status).toBe('active')
+    expect(m.round).toBe(1)
+    // the spectator can never be the accidental last-man-standing winner:
+    // eliminating a leaves c as the sole survivor
+    const evs = m.topOut('a')
+    expect(ofType(evs, 'game_won')).toEqual([
+      { type: 'game_won', round: 1, winnerId: 'c', wins: { a: 0, b: 0, c: 1 } },
+    ])
+    // the round reset revives everyone, spectator included (the server re-marks
+    // them at game start)
+    expect(m.round).toBe(2)
+    expect(m.aliveCount).toBe(3)
+  })
+
+  it('spectating an already-dead player is a no-op', () => {
+    const m = new Match(ft(7), ['a', 'b'])
+    m.topOut('a')
+    expect(m.spectate('a')).toEqual([])
+    expect(m.aliveCount).toBe(1)
+  })
+})
+
 describe('forfeits', () => {
   it('a forfeit ends the game like a top-out, with the reason recorded', () => {
     const m = new Match(ft(7), ['a', 'b'])
@@ -230,6 +260,24 @@ describe('player removal (disconnect)', () => {
     expect(m.winnerId).toBe('a')
   })
 
+  it('a player removed to AFK can rejoin the active match as a live player', () => {
+    const m = new Match(ft(7), ['a', 'b', 'c'])
+    m.removePlayer('b') // AFK: game continues between a and c
+    expect(m.status).toBe('active')
+    expect(m.playerList.map((p) => p.id)).toEqual(['a', 'c'])
+    // return to the game: back in the roster, alive, no events fired
+    expect(m.addPlayer('b')).toEqual([])
+    expect(m.aliveCount).toBe(3)
+    expect(m.playerList.find((p) => p.id === 'b')).toMatchObject({ id: 'b', alive: true })
+    // re-adding someone still present or after finish is a no-op
+    expect(m.addPlayer('a')).toEqual([])
+    m.removePlayer('a')
+    m.removePlayer('b')
+    m.removePlayer('c')
+    expect(m.status).toBe('finished')
+    expect(m.addPlayer('a')).toEqual([])
+  })
+
   it('a removed player is gone permanently and is not revived in later rounds', () => {
     const m = new Match(ft(5), ['a', 'b', 'c'])
     m.removePlayer('c')
@@ -247,6 +295,18 @@ describe('player removal (disconnect)', () => {
     m.removePlayer('a')
     expect(m.status).toBe('finished')
     expect(m.winnerId).toBeNull()
+  })
+
+  it('a sole remaining player who tops out ends the match instead of replaying forever', () => {
+    // when the last player standing is dead (everyone else left or died before
+    // them), resolve sees alive=[] with a single player left; that must be
+    // match_won for them, never an endless draw-replay against an empty roster
+    const m = new Match(ft(3), ['a'])
+    const evs = m.topOut('a')
+    expect(m.status).toBe('finished')
+    expect(m.winnerId).toBe('a')
+    expect(ofType(evs, 'match_won')[0]).toMatchObject({ winnerId: 'a' })
+    expect(ofType(evs, 'game_draw')).toHaveLength(0)
   })
 
   it('removing after finish or for an unknown player is a no-op', () => {
@@ -268,5 +328,38 @@ describe('match end state', () => {
     expect(m.forfeit('a')).toEqual([])
     expect(m.topOutSimultaneous(['a', 'b'])).toEqual([])
     expect(m.winnerId).toBe('a')
+  })
+})
+describe('isMatchPoint', () => {
+  it('flags a player one round win away from taking the match', () => {
+    // first-to-X: goal 3 -> 2 wins is match point
+    expect(isMatchPoint({ a: 2, b: 1 }, { mode: 'firstToX', goal: 3, winBy: 2 }, 'a')).toBe(true)
+    expect(isMatchPoint({ a: 1, b: 1 }, { mode: 'firstToX', goal: 3, winBy: 2 }, 'a')).toBe(false)
+    // win-by-X: a single win must close the required lead
+    expect(isMatchPoint({ a: 3, b: 2 }, { mode: 'winByX', goal: 3, winBy: 2 }, 'a')).toBe(true)
+    expect(isMatchPoint({ a: 2, b: 2 }, { mode: 'winByX', goal: 3, winBy: 2 }, 'a')).toBe(false)
+    // nobody is on match point at 0 wins
+    expect(isMatchPoint({ a: 0, b: 0 }, { mode: 'firstToX', goal: 3, winBy: 2 }, 'a')).toBe(false)
+  })
+})
+
+describe('Match — reconnect revive', () => {
+  it('revive returns a spectated (disconnected) player to the running game', () => {
+    const m = new Match(ft(3), ['a', 'b', 'c'])
+    m.spectate('a') // sat out when their socket dropped
+    expect(m.aliveCount).toBe(2)
+    m.revive('a') // rejoin mid-round
+    expect(m.aliveCount).toBe(3)
+    expect(m.revive('a')).toEqual([]) // idempotent
+    expect(m.revive('ghost')).toEqual([]) // unknown id
+  })
+
+  it('revive cannot resurrect a player in a finished match', () => {
+    const m = new Match(ft(1), ['a', 'b'])
+    m.topOut('b')
+    expect(m.status).toBe('finished')
+    expect(m.aliveCount).toBe(1) // the winner is still marked alive
+    expect(m.revive('b')).toEqual([])
+    expect(m.aliveCount).toBe(1)
   })
 })

@@ -43,8 +43,7 @@ describe('session targeting', () => {
   it('reassigns a manual target that was eliminated instead of hitting them', () => {
     const session = new Session('m', members, settings)
     session.eliminate('c')
-    const [update] = session.setTarget('a', 'manual', 'c')
-    expect(update.targetId).toBe('b')
+    expect(session.setTarget('a', 'manual', 'c')[0]).toMatchObject({ targetId: 'b' })
     expect(garbageTo(session.move('a', lock))).toMatchObject({ to: 'b' })
   })
 

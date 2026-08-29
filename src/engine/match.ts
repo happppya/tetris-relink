@@ -81,6 +81,46 @@ export class Match {
     return this.topOutSimultaneous([playerId])
   }
 
+  /**
+   * A player returns from AFK: re-enter the roster as a live player for the
+   * current game (the server marks spectators right after with `spectate`).
+   * No events fire here — the game just continues with them in it.
+   */
+  addPlayer(playerId: string): MatchEvent[] {
+    if (this.status === 'finished') return []
+    if (this.players.has(playerId)) return []
+    this.players.set(playerId, { id: playerId, wins: 0, alive: true })
+    return []
+  }
+
+  /**
+   * A player switches to spectating: they sit out the current game WITHOUT
+   * resolving it — the game continues among the remaining players, and the
+   * spectator is revived (then re-marked) at each game start. No events fire
+   * here so a spectator can never be the accidental last-man-standing winner.
+   */
+  spectate(playerId: string): MatchEvent[] {
+    if (this.status === 'finished') return []
+    const p = this.players.get(playerId)
+    if (!p) return []
+    p.alive = false
+    return []
+  }
+
+  /**
+   * A buffered player returns after an unexpected disconnect: they were sat out
+   * of the current game (spectate) so they couldn't win while gone; reviving
+   * puts them back in the running round. No events fire — the game just
+   * continues with them in it again.
+   */
+  revive(playerId: string): MatchEvent[] {
+    if (this.status === 'finished') return []
+    const p = this.players.get(playerId)
+    if (!p) return []
+    p.alive = true
+    return []
+  }
+
   /** A player forfeits (e.g., disconnect mid-game): same as topping out. */
   forfeit(playerId: string): MatchEvent[] {
     if (this.status === 'finished') return []
@@ -139,6 +179,18 @@ export class Match {
         this.status = 'finished'
         this.winnerId = null
         events.push({ type: 'match_won', round: this.round, winnerId: null, wins: this.wins() })
+        return
+      }
+      if (this.players.size === 1) {
+        // the last remaining player owns the match even while topped out: with
+        // nobody left to play against, the match must end here, not replay
+        // games forever against an absent roster
+        const survivor = this.players.get([...this.players.keys()][0])!
+        this.lastGameDraw = false
+        this.lastGameWinnerId = survivor.id
+        this.status = 'finished'
+        this.winnerId = survivor.id
+        events.push({ type: 'match_won', round: this.round, winnerId: survivor.id, wins: this.wins() })
         return
       }
       this.lastGameDraw = true

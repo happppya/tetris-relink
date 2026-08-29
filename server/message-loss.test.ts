@@ -22,7 +22,7 @@ beforeAll(async () => {
   // pass through, isolating the desync mechanism from flaky setup.
   proxy = new LossyProxy(serverPort, 1.0, () => 0, ['garbage'])
   proxy.listen(0)
-  await new Promise((r) => setTimeout(r, 50))
+  for (let i = 0; i < 50 && !proxy.server.address(); i++) await new Promise((r) => setTimeout(r, 10))
   proxyPort = (proxy.server.address() as AddressInfo).port
 })
 

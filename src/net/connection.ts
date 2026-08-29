@@ -6,7 +6,7 @@ export const serverUrl = (): string => (import.meta.env.VITE_SERVER_URL as strin
 
 type Handler = (msg: ServerMessage) => void
 
-class NetConnection {
+export class NetConnection {
   private ws: WebSocket | null = null
   private handlers = new Set<Handler>()
   private pingTimer: ReturnType<typeof setInterval> | null = null

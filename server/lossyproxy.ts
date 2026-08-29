@@ -24,8 +24,16 @@ export class LossyProxy {
     wss.on('connection', (clientWs) => {
       const upstream = new WebSocket(`ws://localhost:${targetPort}`)
       this.sockets.add(clientWs)
+      // the upstream link is established asynchronously; buffer client messages
+      // sent before it opens so the very first message (e.g. create_lobby) is
+      // never silently dropped under load
+      const pending: import('ws').RawData[] = []
+      upstream.on('open', () => {
+        while (pending.length) upstream.send(pending.shift()!)
+      })
       clientWs.on('message', (data) => {
         if (upstream.readyState === WebSocket.OPEN) upstream.send(data)
+        else pending.push(data)
       })
       upstream.on('message', (data) => {
         if (this.dropTypes) {

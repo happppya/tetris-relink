@@ -36,12 +36,18 @@ export function renderBoard(
 ) {
   const { cellSize, showGhost } = opts
   const w = BOARD_W * cellSize
-  if (!Array.isArray(board) || board.length !== TOTAL_H || board.some((row) => !Array.isArray(row) || row.length !== BOARD_W)) return
+  // opponent relays carry only the 20 visible rows; pad the hidden ones so the
+  // same renderer handles both shapes
+  const full =
+    Array.isArray(board) && board.length === VISIBLE_H && board.every((row) => Array.isArray(row) && row.length === BOARD_W)
+      ? [...Array.from({ length: HIDDEN_H }, () => Array<Cell>(BOARD_W).fill(null)), ...board]
+      : board
+  if (!Array.isArray(full) || full.length !== TOTAL_H || full.some((row) => !Array.isArray(row) || row.length !== BOARD_W)) return
   const h = VISIBLE_H * cellSize
 
   let dangerRow = TOTAL_H
   for (let y = HIDDEN_H; y < TOTAL_H; y++) {
-    if (board[y].some((c) => c !== null)) {
+    if (full[y].some((c) => c !== null)) {
       dangerRow = y
       break
     }
@@ -81,7 +87,7 @@ export function renderBoard(
 
   for (let y = HIDDEN_H; y < TOTAL_H; y++) {
     for (let x = 0; x < BOARD_W; x++) {
-      const cell = board[y][x]
+      const cell = full[y][x]
       if (cell !== null) drawCell(ctx, x * cellSize, (y - HIDDEN_H) * cellSize, cellSize, PIECE_COLORS[cell])
     }
   }

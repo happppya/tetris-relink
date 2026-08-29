@@ -7,6 +7,14 @@ export interface Member {
   id: string
   name: string
   joinedAt: number
+  /** chose to watch instead of play (also records the role while AFK, for rejoin) */
+  spectating?: boolean
+  /** pressed leave mid-match: out of the game, still in the lobby */
+  afk?: boolean
+  /** game score: +1 per round won, persists until the member leaves / lobby expires */
+  score?: number
+  /** socket dropped unexpectedly: kept for a grace period so they can rejoin */
+  reconnecting?: boolean
 }
 
 export interface LobbyOptions {
@@ -48,7 +56,11 @@ export class Lobby {
   get memberList(): LobbyPlayer[] {
     return [...this.members.values()]
       .sort((a, b) => a.joinedAt - b.joinedAt)
-      .map((m) => ({ id: m.id, name: m.name, isHost: m.id === this.hostId }))
+      .map((m) => ({ id: m.id, name: m.name, isHost: m.id === this.hostId, spectating: m.spectating ?? false, afk: m.afk ?? false, score: m.score ?? 0, reconnecting: m.reconnecting ?? false }))
+  }
+
+  getMember(id: string): Member | undefined {
+    return this.members.get(id)
   }
 
   join(member: Member): boolean {

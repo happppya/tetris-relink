@@ -20,7 +20,7 @@ describe('Lobby', () => {
     const { lobby } = makeLobby()
     expect(lobby.hostId).toBe('host')
     expect(lobby.size).toBe(1)
-    expect(lobby.memberList).toEqual([{ id: 'host', name: 'HOST', isHost: true }])
+    expect(lobby.memberList).toEqual([{ id: 'host', name: 'HOST', isHost: true, spectating: false, afk: false, score: 0, reconnecting: false }])
   })
 
   it('orders the roster by join order', () => {

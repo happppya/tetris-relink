@@ -7,7 +7,7 @@ export interface SimulatedClient {
   close(): Promise<void>
 }
 
-export async function connectSimulatedClient(url: string, name: string): Promise<SimulatedClient> {
+export async function connectSimulatedClient(url: string, name: string, onMessage?: (message: ServerMessage) => void): Promise<SimulatedClient> {
   const ws = new WebSocket(url)
   await new Promise<void>((resolve, reject) => {
     ws.once('open', () => resolve())
@@ -27,6 +27,7 @@ export async function connectSimulatedClient(url: string, name: string): Promise
     } catch {
       return
     }
+    onMessage?.(message)
     for (const waiter of [...waiters]) {
       if (waiter.type !== message.type) continue
       clearTimeout(waiter.timer)

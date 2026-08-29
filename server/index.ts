@@ -30,13 +30,39 @@ let nextMatchId = 1
 export interface ServerHandle {
   registry: LobbyRegistry
   server: import('node:http').Server
+  /** live internal state sizes, for load/leak measurement */
+  stats: () => { conns: number; sessions: number; lobbies: number }
+  /** force-close a client's socket (simulates a network drop / admin kick) */
+  kick: (playerId: string) => void
   close: () => Promise<void>
+}
+
+/**
+ * How long an *unexpected* disconnect (refresh, tab close, network blip) keeps
+ * the player in their lobby + match before they are pruned, so they can rejoin.
+ * An intentional leave (leave_lobby / dismiss_rejoin) is pruned instantly.
+ * Exported so tests can shrink the window; returns the previous value.
+ */
+let reconnectGraceMs = 20_000
+export function setReconnectGraceMs(ms: number): number {
+  const prev = reconnectGraceMs
+  reconnectGraceMs = ms
+  return prev
+}
+
+interface BufferedConn {
+  /** the original connection object (socket closed, but id/lobbyCode preserved) */
+  conn: Conn
+  lobbyCode: string
+  timer: ReturnType<typeof setTimeout>
 }
 
 export function startServer(port: number): ServerHandle {
   const registry = new LobbyRegistry()
   const conns = new Map<string, Conn>()
   const sessions = new Map<string, SessionHandle>()
+  /** unexpectedly-disconnected players held for the grace period pending rejoin */
+  const buffered = new Map<string, BufferedConn>()
   const server = createServer()
   const wss = new WebSocketServer({ server })
 
@@ -46,6 +72,15 @@ export function startServer(port: number): ServerHandle {
 
   const sendToLobby = (lobby: Lobby, msg: ServerMessage) => {
     for (const member of lobby.memberList) {
+      const conn = conns.get(member.id)
+      if (conn) send(conn.ws, msg)
+    }
+  }
+
+  /** Like sendToLobby but skips one member (used for per-player relays the sender already knows). */
+  const sendToLobbyExcept = (lobby: Lobby, exceptId: string, msg: ServerMessage) => {
+    for (const member of lobby.memberList) {
+      if (member.id === exceptId) continue
       const conn = conns.get(member.id)
       if (conn) send(conn.ws, msg)
     }
@@ -63,14 +98,27 @@ export function startServer(port: number): ServerHandle {
     sendToLobby(lobby, { type: 'roster_update', players: lobby.memberList, hostId: lobby.hostId })
   }
 
+  /** Push the public lobby list to every connected client not inside a lobby
+   * (the ones actually looking at the list screen). Keeps the browser's
+   * lobby browser live without any manual refresh. */
+  const broadcastLobbyList = () => {
+    const list: ServerMessage = { type: 'lobby_list', lobbies: registry.publicList() }
+    for (const conn of conns.values()) {
+      if (conn.lobbyCode === null) send(conn.ws, list)
+    }
+  }
+
   const handleLeave = (conn: Conn, lobby: Lobby) => {
     const { empty, newHostId } = lobby.leave(conn.id)
     conn.lobbyCode = null
     if (empty) {
       registry.remove(lobby.code)
+      for (const [matchId, entry] of [...sessions]) if (entry.lobbyCode === lobby.code) sessions.delete(matchId)
+      broadcastLobbyList()
       return
     }
     broadcastRoster(lobby)
+    broadcastLobbyList()
     if (newHostId) {
       const hostConn = conns.get(newHostId)
       if (hostConn) send(hostConn.ws, { type: 'error', code: 'host_transferred', message: 'you are now the host' })
@@ -78,29 +126,87 @@ export function startServer(port: number): ServerHandle {
   }
 
   const sessionFor = (conn: Conn, matchId?: string): SessionHandle | undefined => {
+    // only an *active* match is a valid routing target: a finished session must
+    // never receive locks/snapshots, otherwise a second match in the same lobby
+    // routes against stale authority and every placement gets rolled back
     if (matchId) {
       const match = sessions.get(matchId)
-      return match?.lobbyCode === conn.lobbyCode && match.match.has(conn.id) ? match : undefined
+      return match?.lobbyCode === conn.lobbyCode && match.match.match.status === 'active' && match.match.has(conn.id) ? match : undefined
     }
-    return [...sessions.values()].find((entry) => entry.lobbyCode === conn.lobbyCode && entry.match.has(conn.id))
+    return [...sessions.values()].find(
+      (entry) => entry.lobbyCode === conn.lobbyCode && entry.match.match.status === 'active' && entry.match.has(conn.id),
+    )
+  }
+
+  /** Permanently remove a player from their active match (leave or disconnect). */
+  const removeFromMatch = (conn: Conn): void => {
+    const match = sessionFor(conn)
+    if (!match) return
+    emitMatchEvents(match, match.match.match.removePlayer(conn.id))
+    match.match.session.remove(conn.id)
+    const lobby = registry.get(match.lobbyCode)
+    if (lobby) sendToLobby(lobby, { type: 'player_left', playerId: conn.id })
+  }
+
+  /** The grace period for a buffered player ran out (or they dismissed the rejoin): prune them for good. */
+  const pruneBuffered = (connId: string): void => {
+    const entry = buffered.get(connId)
+    if (!entry) return
+    buffered.delete(connId)
+    clearTimeout(entry.timer)
+    const lobby = registry.get(entry.lobbyCode)
+    // the old conn still carries lobbyCode, so sessionFor finds their match
+    removeFromMatch(entry.conn)
+    if (lobby) handleLeave(entry.conn, lobby)
   }
 
   const emitMatchEvents = (entry: SessionHandle, events: MatchEvent[]) => {
     const lobby = registry.get(entry.lobbyCode)
     if (!lobby) return
-    // A fresh game is beginning: reset targeting + per-game eligibility, and hand
-    // every client a blank board (used for both the next round and a draw replay).
+    // A fresh game is beginning: reset targeting + per-game eligibility, hand
+    // every client a blank board, and re-mark spectators as sitting out (they
+    // are revived by the engine's round reset). If nobody is left to actually
+    // play, the match ends instead of replaying forever.
     const startNextGame = () => {
       entry.match.session.newGame()
-      sendToLobby(lobby, { type: 'game_start', round: entry.match.match.round, players: lobby.memberList, board: entry.match.freshBoard() })
+      for (const specId of entry.match.session.spectatorIds()) entry.match.match.spectate(specId)
+      const events: MatchEvent[] = []
+      const alive = entry.match.match.aliveCount
+      if (alive === 0) {
+        // everyone is spectating: nobody can play, end with no winner
+        events.push({ type: 'match_won', round: entry.match.match.round, winnerId: null, wins: entry.match.match.wins() })
+      } else if (alive === 1) {
+        // a single active player with everyone else watching: they own the match
+        events.push({ type: 'match_won', round: entry.match.match.round, winnerId: entry.match.match.alivePlayerIds()[0]!, wins: entry.match.match.wins() })
+      } else {
+        sendToLobby(lobby, { type: 'game_start', round: entry.match.match.round, players: lobby.memberList, board: entry.match.freshBoard() })
+      }
+      if (events.length) emitMatchEvents(entry, events)
     }
     for (const event of events) {
-      if (event.type === 'eliminated' && event.alive > 0) sendToLobby(lobby, { type: 'game_end', round: entry.match.match.round, winnerId: null, eliminatedIds: [event.playerId], wins: entry.match.match.wins() })
-      if (event.type === 'game_won') sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: event.winnerId, eliminatedIds: [], wins: event.wins })
-      if (event.type === 'game_draw') sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: null, eliminatedIds: [], wins: entry.match.match.wins() })
-      // a match_won with no winner means every player has left; nobody is left
-      // to notify, so skip the broadcast
-      if (event.type === 'match_won' && event.winnerId !== null) sendToLobby(lobby, { type: 'match_end', winnerId: event.winnerId, wins: event.wins })
+      if (event.type === 'eliminated' && event.alive > 0) sendToLobby(lobby, { type: 'game_end', round: entry.match.match.round, winnerId: null, eliminatedIds: [event.playerId], wins: entry.match.match.wins(), scores: entry.match.session.scores() })
+      if (event.type === 'game_won') {
+        // scores() must be read before startNextGame resets the round scores
+        sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: event.winnerId, eliminatedIds: [], wins: event.wins, scores: entry.match.session.scores() })
+      }
+      if (event.type === 'game_draw') sendToLobby(lobby, { type: 'game_end', round: event.round, winnerId: null, eliminatedIds: [], wins: entry.match.match.wins(), scores: entry.match.session.scores() })
+      if (event.type === 'match_won') {
+        // winning the whole match (series) earns exactly +1 game score on the
+        // winner's lobby member — nothing per round, others get nothing — and
+        // it persists until they leave or the lobby expires (across matches)
+        if (event.winnerId) {
+          const winner = lobby.getMember(event.winnerId)
+          if (winner) {
+            winner.score = (winner.score ?? 0) + 1
+            lobby.touch()
+            broadcastRoster(lobby)
+          }
+        }
+        // the match is over: drop the session so a later match in the same
+        // lobby can't be polluted by stale routing to this one
+        sessions.delete(entry.match.matchId)
+        sendToLobby(lobby, { type: 'match_end', winnerId: event.winnerId, wins: event.wins, scores: entry.match.session.scores() })
+      }
       if (event.type === 'game_won' && entry.match.match.status === 'active') startNextGame()
       if (event.type === 'game_draw') startNextGame()
     }
@@ -119,6 +225,27 @@ export function startServer(port: number): ServerHandle {
     switch (msg.type) {
       case 'hello': {
         conn.name = sanitizeName(msg.name)
+        // a player returning after an unexpected disconnect presents their
+        // previous id: adopt that identity and offer the rejoin (they stay
+        // buffered until they choose, or the grace period runs out). The offer
+        // is sent before welcome so the client can act on it in order.
+        if (msg.rejoinId && buffered.has(msg.rejoinId)) {
+          const rejoinId = msg.rejoinId
+          const entry = buffered.get(rejoinId)!
+          const lobby = registry.get(entry.lobbyCode)
+          const matchActive = lobby
+            ? [...sessions.values()].some((s) => s.lobbyCode === lobby.code && s.match.match.status === 'active' && s.match.has(rejoinId))
+            : false
+          conns.delete(conn.id)
+          conn.id = rejoinId
+          conns.delete(conn.id)
+          conn.id = msg.rejoinId
+          conn.name = sanitizeName(msg.name, entry.conn.name ?? undefined)
+          conns.set(conn.id, conn)
+          send(conn.ws, { type: 'rejoin_offer', lobbyCode: entry.lobbyCode, matchActive })
+          send(conn.ws, { type: 'welcome', selfId: conn.id })
+          return
+        }
         send(conn.ws, { type: 'welcome', selfId: conn.id })
         return
       }
@@ -134,6 +261,7 @@ export function startServer(port: number): ServerHandle {
         const lobby = registry.create({ visibility, settings: sanitizeLobbySettings(msg.settings), host })
         conn.lobbyCode = lobby.code
         send(conn.ws, { type: 'lobby_state', lobby: lobbyState(lobby) })
+        broadcastLobbyList()
         return
       }
       case 'join_lobby': {
@@ -156,6 +284,7 @@ export function startServer(port: number): ServerHandle {
         conn.lobbyCode = lobby.code
         send(conn.ws, { type: 'lobby_state', lobby: lobbyState(lobby) })
         broadcastRoster(lobby)
+        broadcastLobbyList()
         return
       }
       case 'leave_lobby': {
@@ -164,8 +293,47 @@ export function startServer(port: number): ServerHandle {
           return
         }
         const lobby = registry.get(conn.lobbyCode)
+        // intentional leave: pruned instantly (no grace), and the player is
+        // permanently removed from the session (same as a disconnect), never
+        // stranding a ghost that can't top out
+        removeFromMatch(conn)
         conn.lobbyCode = null
         if (lobby) handleLeave(conn, lobby)
+        return
+      }
+      case 'rejoin': {
+        // attach this connection to the buffered lobby + match; the player was
+        // kept in both for the grace period, so this is seamless
+        const entry = buffered.get(conn.id)
+        if (!entry) return // offer expired, or already consumed by another tab
+        clearTimeout(entry.timer)
+        buffered.delete(conn.id)
+        conn.lobbyCode = entry.lobbyCode
+        const lobby = registry.get(entry.lobbyCode)
+        if (!lobby) {
+          conn.lobbyCode = null
+          return
+        }
+        const member = lobby.getMember(conn.id)
+        if (member) member.reconnecting = false
+        send(conn.ws, { type: 'lobby_state', lobby: lobbyState(lobby) })
+        broadcastRoster(lobby)
+        const sess = sessionFor(conn)
+        if (sess && member && !member.spectating) {
+          // back as a player: eligible for targeting again and back in the
+          // running game (a genuine spectator stays spectating)
+          sess.match.session.setSpectating(conn.id, false)
+          sess.match.match.revive(conn.id)
+        }
+        if (sess) {
+          // re-key the client's game screen at the current round
+          send(conn.ws, { type: 'match_start', matchId: sess.match.matchId, players: lobby.memberList, settings: { ...lobby.settings }, round: sess.match.match.round })
+        }
+        return
+      }
+      case 'dismiss_rejoin': {
+        // the player declined to come back: prune them right now
+        if (buffered.has(conn.id)) pruneBuffered(conn.id)
         return
       }
       case 'settings_update': {
@@ -192,7 +360,7 @@ export function startServer(port: number): ServerHandle {
           send(conn.ws, { type: 'error', code: 'forbidden', message: 'only the host can start the match' })
           return
         }
-        if (lobby.size < 2) {
+        if (lobby.memberList.filter((m) => !m.spectating).length < 2) {
           send(conn.ws, { type: 'error', code: 'need_players', message: 'need at least 2 players to start' })
           return
         }
@@ -200,20 +368,101 @@ export function startServer(port: number): ServerHandle {
         const matchId = `m${nextMatchId++}`
         const match = new MatchSession(matchId, members, lobby.settings)
         sessions.set(matchId, { match, lobbyCode: lobby.code })
+        // lobby-chosen spectators sit out every game of the match
+        for (const m of lobby.memberList) {
+          if (m.spectating) {
+            match.session.setSpectating(m.id, true)
+            match.match.spectate(m.id)
+          }
+        }
         sendToLobby(lobby, {
           type: 'match_start',
           matchId,
           players: lobby.memberList,
           settings: { ...lobby.settings },
+          round: match.match.round,
         })
+        for (const m of lobby.memberList) {
+          if (m.spectating) sendToLobby(lobby, { type: 'player_spectating', playerId: m.id, spectating: true })
+        }
+        return
+      }
+      case 'spectate': {
+        // lobby-level role choice only: players cannot switch between spectating
+        // and playing once the match has started
+        if (!conn.lobbyCode) {
+          send(conn.ws, { type: 'error', code: 'not_in_lobby', message: 'you are not in a lobby' })
+          return
+        }
+        if (sessionFor(conn)) {
+          send(conn.ws, { type: 'error', code: 'forbidden', message: 'role is locked once the match starts' })
+          return
+        }
+        const lobby = registry.get(conn.lobbyCode)!
+        const member = lobby.getMember(conn.id)
+        if (!member) return
+        member.spectating = msg.spectating
+        member.afk = false
+        broadcastRoster(lobby)
+        return
+      }
+      case 'set_afk': {
+        if (!conn.lobbyCode) {
+          send(conn.ws, { type: 'error', code: 'not_in_lobby', message: 'you are not in a lobby' })
+          return
+        }
+        const lobby = registry.get(conn.lobbyCode)!
+        const member = lobby.getMember(conn.id)
+        if (!member) return
+        if (msg.afk) {
+          // LEAVE while in a match: leave the game (it resolves around them)
+          // but stay in the lobby, marked AFK and able to return to the game
+          const sess = sessionFor(conn)
+          if (sess) {
+            // remember the current role so returning restores it
+            member.spectating = sess.match.session.isSpectating(conn.id)
+            emitMatchEvents(sess, sess.match.match.removePlayer(conn.id))
+            sess.match.session.remove(conn.id)
+          }
+          member.afk = true
+          sendToLobby(lobby, { type: 'player_afk', playerId: conn.id, afk: true })
+          broadcastRoster(lobby)
+          return
+        }
+        // return to the game: rejoin the active match in the remembered role
+        member.afk = false
+        const entry = [...sessions.values()].find((e) => e.lobbyCode === lobby.code && e.match.match.status === 'active')
+        if (entry) {
+          const rejoinAsSpectator = member.spectating === true
+          entry.match.match.addPlayer(conn.id)
+          entry.match.session.add({ id: conn.id, name: conn.name ?? 'PLAYER' })
+          if (rejoinAsSpectator) {
+            entry.match.match.spectate(conn.id)
+            entry.match.session.setSpectating(conn.id, true)
+          }
+          // re-enter the game on this client (the store keys the game screen on it)
+          send(conn.ws, { type: 'match_start', matchId: entry.match.matchId, players: lobby.memberList, settings: { ...lobby.settings }, round: entry.match.match.round })
+        }
+        sendToLobby(lobby, { type: 'player_afk', playerId: conn.id, afk: false })
+        broadcastRoster(lobby)
         return
       }
       case 'topout': {
         const sess = sessionFor(conn, msg.matchId)
         if (!sess) return
+        if (sess.match.session.isSpectating(conn.id)) return
         // mark the player out of the current game so others can't target them
         sess.match.session.eliminate(conn.id)
+        const roundBefore = sess.match.match.round
         emitMatchEvents(sess, sess.match.match.topOut(conn.id))
+        // in an ongoing N>2 game a dead player automatically becomes a
+        // spectator; if their death ended the game (round advanced) they are
+        // simply revived for the next game and keep playing
+        const lobby = registry.get(sess.lobbyCode)
+        if (lobby && sess.match.match.status === 'active' && sess.match.match.round === roundBefore && sess.match.match.playerList.find((p) => p.id === conn.id)?.alive === false) {
+          sess.match.session.setSpectating(conn.id, true)
+          sendToLobby(lobby, { type: 'player_spectating', playerId: conn.id, spectating: true })
+        }
         return
       }
       case 'target': {
@@ -225,10 +474,11 @@ export function startServer(port: number): ServerHandle {
       }
       case 'lock': {
         const sess = sessionFor(conn)
-        if (!sess) {
-          send(conn.ws, { type: 'error', code: 'not_in_match', message: 'you are not in an active match' })
-          return
-        }
+        // an in-flight lock can land right after the session ended (opponent
+        // left/disconnected); drop it silently like snapshot/topout/target so the
+        // client isn't spammed with an error it can't act on mid-game
+        if (!sess) return
+        if (sess.match.session.isSpectating(conn.id)) return
         for (const ev of sess.match.move(conn.id, msg.lock)) {
           if (ev.type === 'garbage') {
             const target = conns.get(ev.to)
@@ -247,7 +497,24 @@ export function startServer(port: number): ServerHandle {
         // on real divergence, resync the client instead of letting it silently drift.
         const res = sess.match.snapshot(conn.id, msg.board, msg.score)
         const lobby = registry.get(sess.lobbyCode)
-        if (lobby) sendToLobby(lobby, { type: 'board_update', playerId: conn.id, board: msg.board, score: msg.score, pendingGarbage: sess.match.pending(conn.id) })
+        // the round lets clients drop stale relays from a previous round that are
+        // still in flight when the next round's game_start arrives; the sender is
+        // skipped because it already knows the board it just reported
+        if (lobby)
+          sendToLobbyExcept(lobby, conn.id, {
+            type: 'board_update',
+            playerId: conn.id,
+            board: msg.board,
+            score: msg.score,
+            pendingGarbage: sess.match.pending(conn.id),
+            round: sess.match.match.round,
+            // hold/next/lines are informational display data for the opponent
+            // view (the board itself stays authoritative); old clients that
+            // don't send them get neutral defaults
+            lines: msg.lines ?? 0,
+            hold: msg.hold ?? null,
+            next: msg.next ?? [],
+          })
         if (res.status === 'resync') {
           send(conn.ws, { type: 'resync', board: res.board, pendingGarbage: res.pendingGarbage, score: res.score })
         } else {
@@ -278,19 +545,28 @@ export function startServer(port: number): ServerHandle {
     })
     ws.on('close', () => {
       conns.delete(conn.id)
-      if (conn.lobbyCode) {
+      if (conn.lobbyCode && !buffered.has(conn.id)) {
         const lobby = registry.get(conn.lobbyCode)
-        const match = sessionFor(conn)
-        if (lobby && match) {
-          // permanent removal: the leaver forfeits the current game and is dropped
-          // from the roster so later round resets can't revive a ghost opponent,
-          // which would hang the match
-          emitMatchEvents(match, match.match.match.removePlayer(conn.id))
-          match.match.session.remove(conn.id)
+        const member = lobby?.getMember(conn.id)
+        if (lobby && member) {
+          // unexpected disconnect (refresh / tab close / network blip): keep the
+          // member and their match for a grace period so they can rejoin. An
+          // intentional leave already ran removeFromMatch + handleLeave (lobbyCode
+          // null by then) and is pruned instantly, so it never reaches here.
+          member.reconnecting = true
+          const sess = sessionFor(conn)
+          if (sess) {
+            // sit them out of the current game so a ghost can't win it, and stop
+            // routing attacks at them while they're gone
+            sess.match.match.spectate(conn.id)
+            sess.match.session.setSpectating(conn.id, true)
+          }
+          broadcastRoster(lobby)
+          const timer = setTimeout(() => pruneBuffered(conn.id), reconnectGraceMs)
+          buffered.set(conn.id, { conn, lobbyCode: conn.lobbyCode, timer })
+          return
         }
-        if (lobby) sendToLobby(lobby, { type: 'player_left', playerId: conn.id })
         conn.lobbyCode = null
-        if (lobby) handleLeave(conn, lobby)
       }
     })
     ws.on('error', () => {})
@@ -302,6 +578,8 @@ export function startServer(port: number): ServerHandle {
       if (now - lobby.lastActivity > IDLE_MS) {
         sendToLobby(lobby, { type: 'error', code: 'lobby_closed', message: 'lobby closed due to inactivity' })
         registry.remove(lobby.code)
+        for (const [matchId, entry] of [...sessions]) if (entry.lobbyCode === lobby.code) sessions.delete(matchId)
+        broadcastLobbyList()
       }
     }
   }, IDLE_CHECK_MS)
@@ -311,9 +589,16 @@ export function startServer(port: number): ServerHandle {
   return {
     registry,
     server,
+    stats: () => ({ conns: conns.size, sessions: sessions.size, lobbies: registry.all().length }),
+    kick: (playerId) => {
+      const conn = conns.get(playerId)
+      if (conn) conn.ws.close()
+    },
     close: () =>
       new Promise((resolve) => {
         clearInterval(idleTimer)
+        for (const entry of buffered.values()) clearTimeout(entry.timer)
+        buffered.clear()
         for (const conn of conns.values()) conn.ws.close()
         wss.close()
         server.close(() => resolve())

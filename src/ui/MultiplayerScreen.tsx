@@ -23,6 +23,9 @@ export function MultiplayerScreen({ onBack }: { onBack: () => void }) {
   const joinLobby = useLobby((s) => s.joinLobby)
   const refreshLobbies = useLobby((s) => s.refreshLobbies)
   const connect = useLobby((s) => s.connect)
+  const pendingRejoin = useLobby((s) => s.pendingRejoin)
+  const rejoinGame = useLobby((s) => s.rejoinGame)
+  const dismissRejoin = useLobby((s) => s.dismissRejoin)
 
   const [visibility, setVisibility] = useState<Visibility>('public')
   const [joinCode, setJoinCode] = useState('')
@@ -128,6 +131,25 @@ export function MultiplayerScreen({ onBack }: { onBack: () => void }) {
       </Section>
 
       {error && <p className="w-80 text-center text-xs text-red-400">{error}</p>}
+
+      {pendingRejoin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 font-mono">
+          <div className="w-96 border border-neutral-700 bg-black p-6">
+            <h2 className="mb-2 text-center text-sm tracking-[0.3em] text-neutral-200">REJOIN GAME?</h2>
+            <p className="mb-4 text-center text-xs text-neutral-500">
+              you were {pendingRejoin.matchActive ? 'in a match' : 'in a lobby'} ({pendingRejoin.lobbyCode}) when you disconnected
+            </p>
+            <div className="flex gap-2">
+              <button onClick={rejoinGame} className="flex-1 border border-neutral-300 py-2 text-sm tracking-widest text-neutral-100 hover:bg-neutral-900">
+                REJOIN
+              </button>
+              <button onClick={dismissRejoin} className="flex-1 border border-neutral-700 py-2 text-sm text-neutral-400 hover:bg-neutral-900">
+                DISMISS
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }

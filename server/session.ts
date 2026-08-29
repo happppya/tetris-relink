@@ -38,6 +38,8 @@ export class Session {
   private players = new Map<string, PlayerState>()
   /** players eliminated for the current game (topped out) — not targetable */
   private unavailable = new Set<string>()
+  /** players watching instead of playing — never targeted, never eliminated */
+  private spectators = new Set<string>()
 
   constructor(matchId: string, members: readonly SessionMember[], settings: LobbySettings) {
     this.matchId = matchId
@@ -54,12 +56,39 @@ export class Session {
   has(id: string): boolean { return this.players.has(id) }
   pendingGarbageOf(id: string): number { return this.players.get(id) ? pendingGarbage(this.players.get(id)!.auth) : 0 }
 
+  /** Current per-player round scores (reset at each new game). */
+  scores(): Record<string, number> {
+    const out: Record<string, number> = {}
+    for (const [id, p] of this.players) out[id] = p.score
+    return out
+  }
+
   /** Mark a player out of the current game (e.g. top-out); it can no longer be targeted. */
   eliminate(id: string): void {
     if (this.players.has(id)) this.unavailable.add(id)
   }
 
-  /** A fresh game starts: everyone is eligible again, targeting and boards reset. */
+  /** Toggle spectator status: spectators are never targeted or eliminated. */
+  setSpectating(id: string, spectating: boolean): void {
+    if (!this.players.has(id)) return
+    if (spectating) this.spectators.add(id)
+    else this.spectators.delete(id)
+  }
+
+  isSpectating(id: string): boolean {
+    return this.spectators.has(id)
+  }
+
+  spectatorIds(): string[] {
+    return [...this.spectators]
+  }
+
+  /** players who could actually be playing (not spectating) */
+  activePlayerCount(): number {
+    return this.players.size - this.spectators.size
+  }
+
+  /** A fresh game starts: everyone is eligible again, targeting, boards and round scores reset. */
   newGame(): void {
     this.unavailable.clear()
     for (const player of this.players.values()) {
@@ -67,12 +96,13 @@ export class Session {
       player.mode = 'random'
       player.manualTarget = null
       player.attackers = []
+      player.score = 0
     }
   }
 
   setTarget(byId: string, mode: TargetMode, targetId?: string): SessionEvent[] {
     const player = this.players.get(byId)
-    if (!player) return []
+    if (!player || this.spectators.has(byId)) return []
     player.mode = mode
     player.manualTarget = mode === 'manual' && targetId && this.players.has(targetId) && targetId !== byId && !this.unavailable.has(targetId) ? targetId : null
     return [{ type: 'target_update', playerId: byId, mode, targetId: this.targetFor(player, byId) }]
@@ -87,7 +117,7 @@ export class Session {
    */
   move(byId: string, lock: LockEvent): SessionEvent[] {
     const from = this.players.get(byId)
-    if (!from) return []
+    if (!from || this.spectators.has(byId)) return []
     let total = 0
     let surplus = 0
     if (lock.cells && lock.cells.length > 0) {
@@ -134,11 +164,18 @@ export class Session {
     return { status: 'resync', board: authoritative, pendingGarbage: pendingGarbage(p.auth), score: p.score }
   }
 
+  /** A player returns from AFK: re-enter the session with a fresh authority. */
+  add(member: SessionMember): void {
+    if (this.players.has(member.id)) return
+    this.players.set(member.id, { id: member.id, name: member.name, auth: createAuthority(), score: 0, mode: 'random', manualTarget: null, attackers: [] })
+  }
+
   dropPlayer(id: string): void { this.remove(id) }
 
   remove(id: string): void {
     this.players.delete(id)
     this.unavailable.delete(id)
+    this.spectators.delete(id)
     for (const player of this.players.values()) {
       player.manualTarget = player.manualTarget === id ? null : player.manualTarget
       player.attackers = player.attackers.filter((attacker) => attacker !== id)
@@ -146,8 +183,9 @@ export class Session {
   }
 
   private targetFor(player: PlayerState, byId: string): string | null {
-    // only living, connected, in-game opponents are eligible targets
-    const opponents = [...this.players.keys()].filter((id) => id !== byId && !this.unavailable.has(id))
+    // only living, connected, in-game, non-spectating opponents are eligible
+    // targets
+    const opponents = [...this.players.keys()].filter((id) => id !== byId && !this.unavailable.has(id) && !this.spectators.has(id))
     if (opponents.length === 0) return null
     if (player.mode === 'manual' && player.manualTarget && opponents.includes(player.manualTarget)) return player.manualTarget
     if (player.mode === 'revenge') {

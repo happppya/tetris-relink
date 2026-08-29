@@ -26,3 +26,15 @@ export function sanitizeName(raw: unknown, fallback = 'PLAYER'): string {
 export function describeLobbySettings(s: LobbySettings): string {
   return s.mode === 'firstToX' ? `FIRST TO ${s.goal}` : `WIN BY ${s.winBy}`
 }
+
+/**
+ * A player is on match point when winning one more round would clinch the
+ * match under the lobby's rules: already at goal-1 wins (first-to-X), or a
+ * single win away from the required lead (win-by-X).
+ */
+export function isMatchPoint(wins: Record<string, number>, settings: LobbySettings, playerId: string): boolean {
+  const mine = wins[playerId] ?? 0
+  if (settings.mode === 'firstToX') return mine >= settings.goal - 1
+  const bestOther = Math.max(0, ...Object.entries(wins).filter(([id]) => id !== playerId).map(([, v]) => v))
+  return mine + 1 - bestOther >= settings.winBy
+}

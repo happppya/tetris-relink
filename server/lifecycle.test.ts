@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { AddressInfo } from 'node:net'
-import { startServer, type ServerHandle } from './index.ts'
+import { setReconnectGraceMs, startServer, type ServerHandle } from './index.ts'
 import { connectSimulatedClient } from './test-client.ts'
 
 let server: ServerHandle
@@ -67,19 +67,30 @@ describe('match lifecycle over WebSockets', () => {
     await Promise.all([a.close(), b.close(), c.close()])
   })
 
-  it('forfeits a disconnected player and notifies the survivor', async () => {
+  it('forfeits a disconnected player and notifies the survivor once the grace period passes', async () => {
+    const prev = setReconnectGraceMs(150)
     const host = await connectSimulatedClient(url, 'HOST2')
     const guest = await connectSimulatedClient(url, 'GUEST2')
-    const created = host.waitFor('lobby_state')
-    host.send({ type: 'create_lobby', name: 'HOST2', visibility: 'private', settings: { mode: 'firstToX', goal: 1, winBy: 2 } })
-    const code = (await created).lobby.code
-    const joined = guest.waitFor('lobby_state')
-    guest.send({ type: 'join_lobby', code }); await joined
-    const started = host.waitFor('match_start'); host.send({ type: 'start_match' }); const match = await started
-    const gameEnd = host.waitFor('game_end'); const left = host.waitFor('player_left')
-    await guest.close()
-    expect(await gameEnd).toMatchObject({ winnerId: null, eliminatedIds: [match.players[1].id] })
-    expect(await left).toMatchObject({ playerId: match.players[1].id })
-    await host.close()
+    try {
+      const created = host.waitFor('lobby_state')
+      host.send({ type: 'create_lobby', name: 'HOST2', visibility: 'private', settings: { mode: 'firstToX', goal: 1, winBy: 2 } })
+      const code = (await created).lobby.code
+      const joined = guest.waitFor('lobby_state')
+      guest.send({ type: 'join_lobby', code }); await joined
+      const started = host.waitFor('match_start'); host.send({ type: 'start_match' }); const match = await started
+      // the drop buffers the guest (still in the roster) until the grace runs out
+      const reconnecting = host.waitFor('roster_update')
+      await guest.close()
+      expect((await reconnecting).players.find((p) => p.name === 'GUEST2')!.reconnecting).toBe(true)
+      // then the forfeit lands: the round resolves for the survivor + player_left
+      // (the dropped player was already sat out of the round on disconnect, so
+      // there is no separate eliminated broadcast)
+      const gameEnd = host.waitFor('game_end'); const left = host.waitFor('player_left')
+      expect(await gameEnd).toMatchObject({ winnerId: match.players[0].id })
+      expect(await left).toMatchObject({ playerId: match.players[1].id })
+    } finally {
+      setReconnectGraceMs(prev)
+      await host.close()
+    }
   })
 })
