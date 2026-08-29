@@ -87,6 +87,8 @@ export interface GameOptions {
   initialBoard?: Cell[][]
   /** pieces drawn in order before the bag randomness takes over */
   fixedQueue?: PieceType[]
+  /** four-wide mode: grey walls fill the side columns, leaving a 4-cell-wide well in the middle */
+  fourWide?: boolean
 }
 
 interface SpinCheck {
@@ -187,6 +189,7 @@ export class Game {
   private garbageQueue: { rows: number; hole: number; bypass: boolean }[] = []
   private cheeseRows = 0
   private cheeseHoles: number[] = []
+  private fourWide = false
 
   constructor(opts: GameOptions = {}) {
     this.board = opts.initialBoard
@@ -194,6 +197,16 @@ export class Game {
       : Array.from({ length: TOTAL_H }, () => Array<Cell>(BOARD_W).fill(null))
     if (this.board.length !== TOTAL_H || this.board.some((row) => row.length !== BOARD_W)) {
       throw new Error('initialBoard must be a TOTAL_H x BOARD_W grid')
+    }
+    this.fourWide = opts.fourWide ?? false
+    if (this.fourWide) {
+      // grey walls fill the side columns (0-2 and 7-9); a row only clears when
+      // the centre 4 columns are filled, since the sides are always occupied
+      for (let y = 0; y < TOTAL_H; y++) {
+        for (let x = 0; x < BOARD_W; x++) {
+          if (x < 3 || x >= BOARD_W - 3) this.board[y][x] = 'W'
+        }
+      }
     }
     this.bag = new Bag(mulberry32(opts.seed ?? ((Math.random() * 2 ** 31) | 0)), opts.fixedQueue ?? [])
     this.handling = { ...DEFAULT_HANDLING, ...opts.handling }
@@ -224,9 +237,9 @@ export class Game {
     return this.frames > 0 ? (this.sentLines * 3600) / this.frames : 0
   }
 
-  receiveGarbage(rows: number, bypassCancel = false, hole = (Math.random() * BOARD_W) | 0) {
+  receiveGarbage(rows: number, bypassCancel = false, hole = this.randomHole()) {
     if (rows <= 0 || this.over) return
-    this.garbageQueue.push({ rows, hole: Math.max(0, Math.min(BOARD_W - 1, Math.round(hole))), bypass: bypassCancel })
+    this.garbageQueue.push({ rows, hole: this.holeIndex(hole), bypass: bypassCancel })
   }
 
   get pendingGarbage(): number {
@@ -480,7 +493,7 @@ export class Game {
     if (count > 0) {
       for (const y of fullRows) {
         this.board.splice(y, 1)
-        this.board.unshift(Array<Cell>(BOARD_W).fill(null))
+        this.board.unshift(this.emptyRow())
       }
       const pc = this.board.every((row) => row.every((c) => c === null))
       this.lines += count
@@ -562,7 +575,7 @@ export class Game {
   private pushGarbageRows(rows: number, hole: number) {
     for (let i = 0; i < rows; i++) {
       const row = Array<Cell>(BOARD_W).fill('G')
-      row[hole] = null
+      row[this.holeIndex(hole)] = null
       this.board.shift()
       this.board.push(row)
     }
@@ -570,15 +583,14 @@ export class Game {
 
   receiveGarbageNow(rows: number) {
     if (rows <= 0 || this.over) return
-    const hole = (Math.random() * BOARD_W) | 0
-    this.pushGarbageRows(rows, hole)
+    this.pushGarbageRows(rows, this.randomHole())
     this.maintainCheese()
   }
 
   setCheese(rows: number) {
     this.cheeseRows = Math.max(0, Math.round(rows))
     while (this.cheeseHoles.length < this.cheeseRows) {
-      this.cheeseHoles.push((Math.random() * BOARD_W) | 0)
+      this.cheeseHoles.push(this.randomHole())
     }
     this.maintainCheese(true)
   }
@@ -589,9 +601,29 @@ export class Game {
       const y = TOTAL_H - this.cheeseRows + i
       if (!force && this.board[y].some((c) => c === 'G')) continue
       const row = Array<Cell>(BOARD_W).fill('G')
-      row[this.cheeseHoles[i] ?? ((Math.random() * BOARD_W) | 0)] = null
+      row[this.holeIndex(this.cheeseHoles[i] ?? this.randomHole())] = null
       this.board[y] = row
     }
+  }
+
+  /** A fresh board row: empty, with the four-wide side walls when enabled. */
+  private emptyRow(): Cell[] {
+    const row = Array<Cell>(BOARD_W).fill(null)
+    if (this.fourWide) {
+      for (let x = 0; x < 3; x++) row[x] = 'W'
+      for (let x = BOARD_W - 3; x < BOARD_W; x++) row[x] = 'W'
+    }
+    return row
+  }
+
+  /** Clamp a hole column into the playable region (centre 4 columns 3..6 in four-wide). */
+  private holeIndex(h: number): number {
+    const clamped = Math.max(0, Math.min(BOARD_W - 1, Math.round(h)))
+    return this.fourWide ? Math.min(BOARD_W - 4, Math.max(3, clamped)) : clamped
+  }
+
+  private randomHole(): number {
+    return this.fourWide ? 3 + ((Math.random() * 4) | 0) : (Math.random() * BOARD_W) | 0
   }
 
   private spawn(type: PieceType): ActivePiece {

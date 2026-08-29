@@ -1,6 +1,6 @@
 export type PieceType = 'I' | 'O' | 'T' | 'S' | 'Z' | 'J' | 'L'
 
-export type Cell = PieceType | 'G' | null
+export type Cell = PieceType | 'G' | 'W' | null
 
 export interface Pos {
   x: number

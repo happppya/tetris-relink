@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Session } from './session.ts'
-import { emptyBoard, serializeBoard } from '../shared/board.ts'
+import { emptyBoard, fourWideBoard, serializeBoard } from '../shared/board.ts'
 import type { LockEvent } from '../shared/protocol.ts'
 
 const settings = { mode: 'firstToX' as const, goal: 7, winBy: 2 }
@@ -15,6 +15,37 @@ function makeSession() {
     { id: 'c', name: 'C' },
   ], settings)
 }
+
+describe('four-wide sessions', () => {
+  const wideSettings = { mode: 'firstToX' as const, goal: 3, winBy: 2, fourWide: true }
+
+  it('walls the authoritative boards: an empty four-wide snapshot matches, a plain one does not', () => {
+    const s = new Session('m1', [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], wideSettings)
+    expect(s.checkSnapshot('a', serializeBoard(fourWideBoard()), 0)).toEqual({ status: 'ok' })
+    expect(s.checkSnapshot('a', serializeBoard(emptyBoard()), 0).status).toBe('resync')
+  })
+
+  it('rejects a placement that reports cells inside the wall', () => {
+    const s = new Session('m1', [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], wideSettings)
+    // placing into the grey side wall (column 0) is invalid: no attack, no mutation
+    expect(s.move('a', { ...tetris, cells: [{ x: 0, y: 19 }] })).toEqual([])
+    expect(s.checkSnapshot('a', serializeBoard(fourWideBoard()), 0)).toEqual({ status: 'ok' })
+  })
+
+  it('clamps garbage holes into the centre 4 columns and tells the client the clamped hole', () => {
+    const s = new Session('m1', [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], wideSettings)
+    const events = s.move('a', tetris)
+    const g = events.find((e) => e.type === 'garbage')
+    expect(g).toMatchObject({ to: 'b', lines: 4 })
+    if (g && g.type === 'garbage') {
+      expect(g.hole).toBeGreaterThanOrEqual(3)
+      expect(g.hole).toBeLessThanOrEqual(6)
+    }
+    // a fresh game keeps the walls too
+    s.newGame()
+    expect(s.checkSnapshot('b', serializeBoard(fourWideBoard()), 0)).toEqual({ status: 'ok' })
+  })
+})
 
 describe('Session', () => {
   it('starts every player present and accepts an empty snapshot', () => {

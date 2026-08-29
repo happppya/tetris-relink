@@ -30,6 +30,8 @@ export interface LobbySettings {
   goal: number
   /** required lead in games won (win-by-X) */
   winBy: number
+  /** four-wide mode: grey walls fill the side columns, leaving a 4-cell-wide well; absent = off on the wire */
+  fourWide?: boolean
 }
 
 export interface LobbyPlayer {

@@ -18,6 +18,8 @@ export interface QueuedGarbage {
 export interface BoardAuthority {
   board: BoardCell[][]
   queue: QueuedGarbage[]
+  /** four-wide mode: side columns walled, garbage holes clamped to the centre 4 */
+  fourWide: boolean
 }
 
 export interface LockPlacement {
@@ -41,12 +43,12 @@ export interface ApplyOutcome {
   surplus: number
 }
 
-export function createAuthority(): BoardAuthority {
-  return { board: emptyRows(), queue: [] }
+export function createAuthority(fourWide = false): BoardAuthority {
+  return { board: fourWide ? walledRows() : emptyRows(), queue: [], fourWide }
 }
 
 export function resetAuthority(a: BoardAuthority): void {
-  a.board = emptyRows()
+  a.board = a.fourWide ? walledRows() : emptyRows()
   a.queue = []
 }
 
@@ -58,13 +60,22 @@ export function pendingGarbage(a: BoardAuthority): number {
   return a.queue.reduce((sum, g) => sum + g.rows, 0)
 }
 
-export function queueGarbage(a: BoardAuthority, rows: number, hole: number): void {
-  if (rows <= 0) return
-  a.queue.push({ rows, hole: clampHole(hole) })
+export function queueGarbage(a: BoardAuthority, rows: number, hole: number): number {
+  if (rows <= 0) return 0
+  const h = clampHole(a, hole)
+  a.queue.push({ rows, hole: h })
+  return h
 }
 
 const emptyRows = (): BoardCell[][] => Array.from({ length: AUTH_H }, () => Array<BoardCell>(AUTH_W).fill(null))
-const clampHole = (h: number): number => Math.max(0, Math.min(AUTH_W - 1, Math.round(h)))
+const walledRows = (): BoardCell[][] =>
+  Array.from({ length: AUTH_H }, () => Array.from({ length: AUTH_W }, (_, x) => (x < 3 || x >= AUTH_W - 3 ? 'W' : null)))
+
+/** Clamp a hole column into the playable region (centre 4 columns 3..6 in four-wide). */
+const clampHole = (a: BoardAuthority, h: number): number => {
+  const clamped = Math.max(0, Math.min(AUTH_W - 1, Math.round(h)))
+  return a.fourWide ? Math.min(AUTH_W - 4, Math.max(3, clamped)) : clamped
+}
 
 /**
  * Apply a lock to the authoritative board. The server reconstructs the board
@@ -113,7 +124,7 @@ function clearFullRows(a: BoardAuthority): number {
       count++
     }
   }
-  while (a.board.length < AUTH_H) a.board.unshift(emptyRows()[0])
+  while (a.board.length < AUTH_H) a.board.unshift(a.fourWide ? walledRows()[0] : emptyRows()[0])
   return count
 }
 
@@ -135,7 +146,7 @@ function applyQueued(a: BoardAuthority): number {
     total += g.rows
     for (let i = 0; i < g.rows; i++) {
       const row = Array<BoardCell>(AUTH_W).fill('G')
-      row[clampHole(g.hole)] = null
+      row[clampHole(a, g.hole)] = null
       a.board.shift()
       a.board.push(row)
     }

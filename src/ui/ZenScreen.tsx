@@ -136,6 +136,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
         attack: settings.attack,
         scoring: settings.scoring,
         cheeseRows: zenSettings.garbage === 'cheese' ? CHEESE_ROWS : 0,
+        fourWide: zenSettings.fourWide,
         handling: handlingFromSettings(settings),
       },
       onEvent: (events: GameEvent[]) => {
@@ -522,6 +523,21 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
                 className="w-32 accent-neutral-300"
               />
               <span className="w-8 text-right text-xs text-neutral-200">{zenSettings.gravityLevel}</span>
+            </div>
+          </section>
+
+          <section className="mb-6">
+            <h3 className="mb-2 border-b border-neutral-800 pb-1 text-[10px] tracking-widest text-neutral-600">FOUR-WIDE</h3>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-neutral-500">grey walls · 4-cell well</span>
+              <button
+                onClick={() => updateZen({ fourWide: !zenSettings.fourWide })}
+                className={`w-16 border px-2 py-0.5 text-xs ${
+                  zenSettings.fourWide ? 'border-neutral-300 text-neutral-100' : 'border-neutral-700 text-neutral-500'
+                }`}
+              >
+                {zenSettings.fourWide ? 'ON' : 'OFF'}
+              </button>
             </div>
           </section>
 

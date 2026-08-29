@@ -563,3 +563,53 @@ describe('Garbage & competitive mechanics', () => {
     ).toBe('full')
   })
 })
+
+describe('four-wide mode', () => {
+  it('walls the side columns and leaves a 4-cell-wide well', () => {
+    const game = new Game({ seed: 1, fourWide: true })
+    for (const row of game.board) {
+      for (let x = 0; x < 3; x++) expect(row[x]).toBe('W')
+      for (let x = 7; x < BOARD_W; x++) expect(row[x]).toBe('W')
+      for (let x = 3; x < 7; x++) expect(row[x]).toBeNull()
+    }
+    // a non-four-wide game stays completely open
+    const plain = new Game({ seed: 1 })
+    expect(plain.board[0].every((c) => c === null)).toBe(true)
+  })
+
+  it('clears a line when the well fills and the fresh row keeps its walls', () => {
+    const game = new Game({ seed: 1, fourWide: true, fixedQueue: ['I'] })
+    // an I at spawn x=3 spans the whole well: one drop fills the bottom row
+    const events = game.tick({ dir: 0, softDrop: false, actions: ['hardDrop'] })
+    expect(events.some((e) => e.type === 'clear')).toBe(true)
+    expect(game.lines).toBe(1)
+    expect(game.board[0][0]).toBe('W')
+    expect(game.board[0][9]).toBe('W')
+    expect(game.board[0][5]).toBeNull()
+  })
+
+  it('clamps garbage holes into the centre 4 columns', () => {
+    const game = new Game({ seed: 1, fourWide: true, sendsGarbage: true })
+    game.receiveGarbage(1, false, 0)
+    game.receiveGarbage(1, false, 9)
+    game.receiveGarbage(1) // random hole
+    game.active = { type: 'O', rot: 0, x: 4, y: 3 }
+    game.tick({ dir: 0, softDrop: false, actions: ['hardDrop'] })
+    const garbageRows = game.board.filter((row) => row.some((c) => c === 'G'))
+    expect(garbageRows.length).toBe(3)
+    for (const row of garbageRows) {
+      const hole = row.findIndex((c) => c === null)
+      expect(hole).toBeGreaterThanOrEqual(3)
+      expect(hole).toBeLessThanOrEqual(6)
+    }
+  })
+
+  it('keeps cheese holes inside the well when garbage mode is cheese', () => {
+    const game = new Game({ seed: 1, fourWide: true, cheeseRows: 2 })
+    for (const row of game.board.slice(-2)) {
+      const hole = row.findIndex((c) => c === null)
+      expect(hole).toBeGreaterThanOrEqual(3)
+      expect(hole).toBeLessThanOrEqual(6)
+    }
+  })
+})

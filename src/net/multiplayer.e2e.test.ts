@@ -91,7 +91,9 @@ interface Player {
 }
 
 function makePlayer(matchId: string, conn: NetConnection, store: LobbyHook, fixedQueue: PieceType[]): Player {
-  const game = new Game({ mode: 'versus', sendsGarbage: true, fixedQueue })
+  // mirrors the game screen: the engine is created from the lobby settings so
+  // a four-wide lobby opens every board with grey side walls
+  const game = new Game({ mode: 'versus', sendsGarbage: true, fourWide: store.getState().match?.settings.fourWide, fixedQueue })
   const client = new MatchClient({
     game,
     matchId,
@@ -181,6 +183,53 @@ describe('real client stack against the real server', () => {
 
     await closeClient(a)
     await closeClient(b)
+  })
+
+  it('plays a four-wide round: both boards walled, garbage holes stay in the well', async () => {
+    const { a, b, matchId } = await setupMatch({ mode: 'firstToX', goal: 3, winBy: 2, fourWide: true })
+    const playerA = makePlayer(matchId, a.conn, a.store, ['I', 'I', 'I', 'I'])
+    const playerB = makePlayer(matchId, b.conn, b.store, ['T'])
+    await settle() // let game_start (round 1) land before placing anything
+
+    // both engines opened the round walled: grey sides, open 4-cell well
+    expect(playerA.game.board[0][0]).toBe('W')
+    expect(playerA.game.board[0][9]).toBe('W')
+    expect(playerA.game.board[0][5]).toBeNull()
+    expect(playerB.game.board[0][0]).toBe('W')
+
+    // an I at spawn x=3 spans the whole well, so four consecutive drops are
+    // four single clears at combo x=0..3: 0, 0, ln(3.5)=1, ln(4.75)=1 → 2 lines
+    for (let i = 0; i < 4; i++) tick(playerA, ['hardDrop'])
+    expect(playerA.game.lines).toBe(4)
+    await waitFor(() => playerB.game.pendingGarbage === 2, 'B receives four-wide garbage')
+
+    // B applies the garbage with a non-clearing placement; every hole must sit
+    // inside the well (3..6) on B's real engine board
+    tick(playerB, ['hardDrop'])
+    await waitFor(() => playerB.game.pendingGarbage === 0, 'B garbage applied')
+    const holes = playerB.game.board
+      .filter((row) => row.some((c) => c === 'G'))
+      .map((row) => row.findIndex((c) => c === null))
+    expect(holes.length).toBe(2)
+    for (const h of holes) {
+      expect(h).toBeGreaterThanOrEqual(3)
+      expect(h).toBeLessThanOrEqual(6)
+    }
+
+    // boards relay with their walls intact: each side sees the other's real board
+    tick(playerA, [], 0, 30)
+    tick(playerB, [], 0, 30)
+    await waitFor(() => playerA.client.getState().opponents[b.store.getState().selfId!]?.board.length === 20, 'A sees B board')
+    expect(playerA.client.getState().opponents[b.store.getState().selfId!]!.board[0][0]).toBe('W')
+    expect(playerB.client.getState().opponents[a.store.getState().selfId!]!.board[0][0]).toBe('W')
+
+    // walls + clamped holes never caused a resync on either side
+    await settle()
+    expect(playerA.client.resyncs).toBe(0)
+    expect(playerB.client.resyncs).toBe(0)
+
+    await closeClient(b)
+    await closeClient(a)
   })
 
   it('a round ending mid-match opens the intermission with round scores; only the match winner earns +1 game score', { timeout: 30000 }, async () => {

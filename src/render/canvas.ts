@@ -11,6 +11,7 @@ export const PIECE_COLORS: Record<string, string> = {
   J: '#7f93bf',
   L: '#bf9a5f',
   G: '#484848',
+  W: '#3a3a3a',
 }
 
 export const EMPTY_COLOR = '#0a0a0a'

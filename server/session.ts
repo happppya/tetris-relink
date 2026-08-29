@@ -44,8 +44,9 @@ export class Session {
   constructor(matchId: string, members: readonly SessionMember[], settings: LobbySettings) {
     this.matchId = matchId
     this.settings = { ...settings }
+    const fourWide = settings.fourWide
     for (const m of members) {
-      this.players.set(m.id, { id: m.id, name: m.name, auth: createAuthority(), score: 0, mode: 'random', manualTarget: null, attackers: [] })
+      this.players.set(m.id, { id: m.id, name: m.name, auth: createAuthority(fourWide), score: 0, mode: 'random', manualTarget: null, attackers: [] })
     }
   }
 
@@ -147,10 +148,13 @@ export class Session {
     const targetId = this.targetFor(from, byId)
     if (!targetId) return []
     const target = this.players.get(targetId)!
-    queueGarbage(target.auth, surplus, 0)
+    // queueGarbage clamps the hole into the playable region (centre 4 in
+    // four-wide) and returns it, so the event the client applies matches the
+    // server's own board exactly
+    const hole = queueGarbage(target.auth, surplus, 0)
     target.attackers = [byId, ...target.attackers.filter((id) => id !== byId)]
     return [
-      { type: 'garbage', to: targetId, lines: surplus, hole: 0, from: byId },
+      { type: 'garbage', to: targetId, lines: surplus, hole, from: byId },
       { type: 'target_update', playerId: byId, mode: from.mode, targetId },
     ]
   }
@@ -167,7 +171,7 @@ export class Session {
   /** A player returns from AFK: re-enter the session with a fresh authority. */
   add(member: SessionMember): void {
     if (this.players.has(member.id)) return
-    this.players.set(member.id, { id: member.id, name: member.name, auth: createAuthority(), score: 0, mode: 'random', manualTarget: null, attackers: [] })
+    this.players.set(member.id, { id: member.id, name: member.name, auth: createAuthority(this.settings.fourWide), score: 0, mode: 'random', manualTarget: null, attackers: [] })
   }
 
   dropPlayer(id: string): void { this.remove(id) }

@@ -12,6 +12,8 @@ export interface ZenSettings {
   assist: boolean
   hintCount: number
   assistProfile: string
+  /** four-wide mode: grey walls fill the side columns, leaving a 4-cell-wide well */
+  fourWide: boolean
 }
 
 export const DEFAULT_ZEN_SETTINGS: ZenSettings = {
@@ -22,6 +24,7 @@ export const DEFAULT_ZEN_SETTINGS: ZenSettings = {
   assist: false,
   hintCount: 2,
   assistProfile: 'optimal',
+  fourWide: false,
 }
 
 export const ZEN_BASE_XP = 5000

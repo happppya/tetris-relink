@@ -224,6 +224,7 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
       gameOptions: {
         sendsGarbage: true,
         attack: settings.attack,
+        fourWide: match.settings.fourWide,
         handling: handlingFromSettings(settings),
       },
       onEvent: (events: GameEvent[]) => {

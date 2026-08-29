@@ -1,6 +1,6 @@
 import type { LobbySettings } from './protocol.ts'
 
-export const DEFAULT_LOBBY_SETTINGS: LobbySettings = { mode: 'firstToX', goal: 7, winBy: 2 }
+export const DEFAULT_LOBBY_SETTINGS: LobbySettings = { mode: 'firstToX', goal: 7, winBy: 2, fourWide: false }
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 const clampInt = (v: unknown, min: number, max: number, fallback: number) =>
@@ -14,6 +14,7 @@ export function sanitizeLobbySettings(raw: unknown): LobbySettings {
   if (r.mode === 'firstToX' || r.mode === 'winByX') out.mode = r.mode
   out.goal = clampInt(r.goal, 1, 99, out.goal)
   out.winBy = clampInt(r.winBy, 1, 99, out.winBy)
+  if (typeof r.fourWide === 'boolean') out.fourWide = r.fourWide
   return out
 }
 
@@ -24,7 +25,8 @@ export function sanitizeName(raw: unknown, fallback = 'PLAYER'): string {
 }
 
 export function describeLobbySettings(s: LobbySettings): string {
-  return s.mode === 'firstToX' ? `FIRST TO ${s.goal}` : `WIN BY ${s.winBy}`
+  const base = s.mode === 'firstToX' ? `FIRST TO ${s.goal}` : `WIN BY ${s.winBy}`
+  return s.fourWide ? `${base} · 4-WIDE` : base
 }
 
 /**

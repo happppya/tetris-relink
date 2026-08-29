@@ -6,6 +6,13 @@ export function emptyBoard(): BoardCell[][] {
   return Array.from({ length: VISIBLE_H }, () => Array<BoardCell>(BOARD_W).fill(null))
 }
 
+/** Four-wide starting board: grey walls in the side columns, open 4-cell well. */
+export function fourWideBoard(): BoardCell[][] {
+  return Array.from({ length: VISIBLE_H }, () =>
+    Array.from({ length: BOARD_W }, (_, x) => (x < 3 || x >= BOARD_W - 3 ? 'W' : null)),
+  )
+}
+
 /** Rows joined by '/', cells '.' (empty) or a piece/garbage letter. */
 export function serializeBoard(board: BoardCell[][]): string {
   return board.map((row) => row.map((c) => c ?? '.').join('')).join('/')

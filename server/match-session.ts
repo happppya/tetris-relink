@@ -1,17 +1,19 @@
 import { Match } from '../src/engine/match.ts'
 import { Session, type SessionEvent, type SessionMember } from './session.ts'
 import type { Board, LobbySettings, LockEvent, TargetMode } from '../shared/protocol.ts'
-import { emptyBoard, serializeBoard } from '../shared/board.ts'
+import { emptyBoard, fourWideBoard, serializeBoard } from '../shared/board.ts'
 
 export class MatchSession {
   readonly match: Match
   readonly session: Session
   readonly matchId: string
+  private readonly settings: LobbySettings
 
   constructor(matchId: string, members: readonly SessionMember[], settings: LobbySettings) {
     this.matchId = matchId
     this.match = new Match(settings, members.map(({ id }) => id))
     this.session = new Session(matchId, members, settings)
+    this.settings = { ...settings }
   }
 
   has(id: string): boolean { return this.session.has(id) }
@@ -20,5 +22,5 @@ export class MatchSession {
   snapshot(id: string, board: string, score: number) { return this.session.checkSnapshot(id, board, score) }
   pending(id: string): number { return this.session.pendingGarbageOf(id) }
   remove(id: string): void { this.session.remove(id) }
-  freshBoard(): Board { return serializeBoard(emptyBoard()) }
+  freshBoard(): Board { return serializeBoard(this.settings.fourWide ? fourWideBoard() : emptyBoard()) }
 }

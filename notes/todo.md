@@ -140,3 +140,12 @@ Status legend: [ ] todo · [~] in progress · [x] done
 
 - Fixed .github/workflows/deploy.yml: base path was hardcoded to /tetris-liberation/ (repo is tetris-relink) — now derived from `${{ github.event.repository.name }}` so assets always resolve on the project site; added actions/configure-pages@v5, a .nojekyll touch before upload (Jekyll), and VITE_SERVER_URL from the repo variable `vars.VITE_SERVER_URL` (unset → localhost dev default).
 - connection.ts now treats an empty VITE_SERVER_URL as unset (`'' ?? default` previously kept the empty string and broke WebSocket('') on CI builds without the variable); 3 new unit tests pin the fallback + configured-URL behavior.
+
+## Four-wide mode (zen + multiplayer)
+
+- New `fourWide` option: grey 'W' walls fill the side columns (0-2, 7-9), leaving a 4-cell-wide well (3-6). A row clears when the centre 4 fill (sides are always occupied); fresh rows re-lay the walls; perfect clears are impossible by design.
+- Engine: `GameOptions.fourWide` — walled init rows, walled post-clear top rows, garbage/cheese holes clamped into 3..6 (random holes pick from the well only). Fixed a real clamp bug the test caught (upper bound was 7, not 6).
+- Zen: FOUR-WIDE toggle in the zen setup sidebar, persisted in ZenSettings.
+- Multiplayer: `LobbySettings.fourWide` (sanitized server-side, absent = off on the wire), 4-WIDE toggle in lobby ROOM SETTINGS (host-only), game screen builds its engine from match settings. Server authorities are walled, reject placements into the wall, and `queueGarbage` clamps holes and reports the clamped hole so the garbage event the client applies matches the server board exactly. `freshBoard()` (game_start) ships walled boards.
+- Renderer: 'W' drawn as a dark grey block.
+- Tests: engine (walls, well clear + walled fresh rows, hole clamp, cheese holes), session (walled authorities + snapshot match, wall-placement rejection, clamped hole event, walls survive newGame), E2E four-wide round through the real stack (both engines walled, 4 single clears route 2 lines via the ln rule, B's garbage holes all in 3..6, boards relay walled, zero resyncs).
