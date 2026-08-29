@@ -192,6 +192,23 @@ describe('MatchClient', () => {
     expect(client.getState().finished).toBe(true)
   })
 
+  it('clearIntermission on the UI dismissal stops the scoreboard from being resurrected by a later relay', () => {
+    const { client, feed } = harness()
+    feed(gameStart(1))
+    feed({ type: 'game_end', round: 1, winnerId: 'b', eliminatedIds: [], wins: { a: 0, b: 1 }, scores: { a: 450, b: 1200 } })
+    expect(client.getState().intermission).not.toBeNull()
+    // the UI dismissed the scoreboard after its timeout; a later relay must not
+    // re-open it the way it would if MatchClient kept a stale intermission
+    client.clearIntermission()
+    expect(client.getState().intermission).toBeNull()
+    feed({ type: 'board_update', playerId: 'b', board: serializeBoard(emptyBoard()), score: 0, pendingGarbage: 0, round: 2 })
+    expect(client.getState().intermission).toBeNull()
+    // a brand-new round ending still opens a fresh intermission
+    feed({ type: 'game_end', round: 2, winnerId: 'a', eliminatedIds: [], wins: { a: 1, b: 1 }, scores: { a: 300, b: 100 } })
+    expect(client.getState().intermission).not.toBeNull()
+    expect(client.getState().intermission!.round).toBe(2)
+  })
+
   it('a mid-round elimination does not open an intermission (the round continues)', () => {
     const { client, feed } = harness()
     feed(gameStart(1))

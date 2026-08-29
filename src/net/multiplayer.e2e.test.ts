@@ -801,6 +801,68 @@ describe('leave/disconnect races through the real stack', () => {
       setReconnectGraceMs(prev)
     }
   })
+
+  it('a refresh whose new socket beats its own close still gets the rejoin popup and never duplicates the member', { timeout: 30000 }, async () => {
+    const { a, b, matchId } = await setupMatch()
+    const playerA = makePlayer(matchId, a.conn, a.store, ['I'])
+    makePlayer(matchId, b.conn, b.store, ['T'])
+    await settle()
+    const oldBId = b.store.getState().selfId!
+
+    // Simulate a refresh whose new socket arrives BEFORE the old socket's close
+    // is processed: the old socket is still open (still in conns under oldBId),
+    // so buffered does not contain the id yet. Previously this made the server
+    // treat the reconnect as a brand-new player: no rejoin_offer (no popup) and
+    // a fresh id that could re-join as a duplicate "reconnecting" copy.
+    const b2conn = new NetConnection()
+    const b2 = createLobbyStore(b2conn)
+    const b2errors: string[] = []
+    b2conn.onMessage((msg) => {
+      if (msg.type === 'error' && msg.code !== 'host_transferred' && msg.code !== 'connection_lost') b2errors.push(msg.message)
+    })
+    b2.getState().setName('B')
+    b2.setState({ selfId: oldBId })
+    b2.getState().connect(url)
+    await waitFor(() => b2.getState().status === 'connected', 'B2 connected')
+
+    // the rejoin offer is still issued -> the popup appears (it was missed before)
+    expect(b2.getState().pendingRejoin).not.toBeNull()
+    expect(b2.getState().pendingRejoin!.lobbyCode).toBe(a.store.getState().lobby!.code)
+    expect(b2.getState().selfId).toBe(oldBId) // identity preserved, no fresh id
+
+    // accepting returns B to the live match with exactly ONE member (no duplicate)
+    expect(a.store.getState().lobby!.players.filter((p) => p.id === oldBId)).toHaveLength(1)
+    b2.getState().rejoinGame()
+    await waitFor(() => b2.getState().lobby !== null && b2.getState().match !== null, 'B2 rejoined the match')
+    expect(b2.getState().match!.matchId).toBe(matchId)
+    expect(a.store.getState().lobby!.players.filter((p) => p.id === oldBId)).toHaveLength(1)
+    await waitFor(() => a.store.getState().lobby!.players.find((p) => p.id === oldBId)?.reconnecting === false, 'reconnecting cleared')
+    expect(b2errors).toHaveLength(0)
+
+    // B2 plays again through the fresh stack; the board relays to A
+    const playerB2 = makePlayer(matchId, b2conn, b2, ['T'])
+    await settle(150)
+    tick(playerB2, ['hardDrop'])
+    tick(playerB2, [], 0, 30)
+    await settle(150)
+    await waitFor(() => playerA.client.getState().opponents[oldBId]?.board.length === 20, 'A sees B2 board')
+    expect(playerA.client.getState().finished).toBe(false)
+
+    // the delayed original socket finally closes: it must NOT re-buffer / re-mark
+    // the member as reconnecting, and must not add a second copy
+    await b.conn.close()
+    await settle(150)
+    expect(a.store.getState().lobby!.players.filter((p) => p.id === oldBId)).toHaveLength(1)
+    expect(a.store.getState().lobby!.players.find((p) => p.id === oldBId)?.reconnecting).toBe(false)
+    expect(playerA.client.getState().opponents[oldBId]?.board.length).toBe(20)
+    expect(server.stats().sessions).toBe(1)
+
+    await closeClient(a)
+    if (b2.getState().lobby || b2.getState().match) b2.getState().leaveLobby()
+    await settle(50)
+    await b2conn.close()
+    await b.conn.close()
+  })
 })
 
 describe('spectating and AFK through the real stack', () => {

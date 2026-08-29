@@ -140,6 +140,15 @@ export class MatchClient {
     this.matchEndHandler = handler
   }
 
+  /**
+   * The UI owns dismissing the intermission after its timeout, but this store
+   * must match so the next relay (e.g. an opponent's board_update) doesn't
+   * resurrect a scoreboard that already cleared.
+   */
+  clearIntermission(): void {
+    if (this.state.intermission) this.setState({ intermission: null })
+  }
+
   destroy(): void {
     this.unsubscribe()
     this.listeners.clear()

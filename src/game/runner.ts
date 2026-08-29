@@ -62,6 +62,18 @@ export class GameRunner {
   }
 
   /**
+   * Prepare for a fresh round in a series-of-games match. A top-out finalizes
+   * the run (singleplayer end-of-run semantics set `ended`); multiplayer reuses
+   * this same runner across rounds, so a new round must clear that so the
+   * freshly-restored board can tick again.
+   */
+  reset() {
+    this.ended = false
+    this.acc = 0
+    this.actionQueue.length = 0
+  }
+
+  /**
    * Run one wall-clock frame. The simulator steps in fixed 60Hz ticks; the
    * buffered action queue is consumed exactly once, on the first tick that runs
    * in this call, so actions survive intermediate non-ticking frames and are

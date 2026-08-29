@@ -204,6 +204,7 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
     let raf = 0
     let last = performance.now()
     let lastHudUpdate = 0
+    let currentRound = match.round
     let paused = false
 
     const fx = new EffectsSystem(settings.fx)
@@ -245,6 +246,13 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
     const unsubscribeState = client.subscribe((s) => {
       opponentsRef.current = s.opponents
       setOpponents(s.opponents)
+      // the next round's game_start restored a fresh board: a top-out had
+      // finalized this runner (singleplayer end-of-run semantics), so un-finalize
+      // it or the round never ticks on this client
+      if (s.round !== currentRound) {
+        currentRound = s.round
+        runner.reset()
+      }
       setRound(s.round)
       setWins(s.wins)
       setError(s.error)
@@ -263,6 +271,9 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
         intermissionTimer = setTimeout(() => {
           intermissionRef.current = null
           setIntermission(null)
+          // keep the store in sync so an opponent's next board_update can't
+          // resurrect a scoreboard that already dismissed
+          client.clearIntermission()
         }, INTERMISSION_MS)
       }
     })

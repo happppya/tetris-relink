@@ -170,6 +170,19 @@ export function startServer(port: number): ServerHandle {
     }
   }
 
+  /**
+   * The lobby a player id is currently a live member of, via their *active*
+   * connection (still in conns, close not yet processed). Used when a page
+   * refresh's new socket beats its own old socket's close: the player isn't in
+   * `buffered` yet, but they're still a member, so we can still offer a rejoin.
+   */
+  const liveMemberLobby = (id: string): Lobby | undefined => {
+    const live = conns.get(id)
+    if (!live?.lobbyCode) return undefined
+    const lobby = registry.get(live.lobbyCode)
+    return lobby?.getMember(id) ? lobby : undefined
+  }
+
   const sessionFor = (conn: Conn, matchId?: string): SessionHandle | undefined => {
     // only an *active* match is a valid routing target: a finished session must
     // never receive locks/snapshots, otherwise a second match in the same lobby
@@ -280,26 +293,47 @@ export function startServer(port: number): ServerHandle {
         // previous id: adopt that identity and offer the rejoin (they stay
         // buffered until they choose, or the grace period runs out). The offer
         // is sent before welcome so the client can act on it in order.
-        if (msg.rejoinId && buffered.has(msg.rejoinId)) {
+        //
+        // Normally the close handler already buffered them under that id. When a
+        // refresh's new socket beats its own old socket's close, they aren't
+        // buffered yet but their id is still a *live* member — materialize the
+        // buffer right here so we still offer the popup instead of re-joining
+        // them under a brand-new identity (which stranded a "reconnecting" copy).
+        if (msg.rejoinId && (buffered.has(msg.rejoinId) || liveMemberLobby(msg.rejoinId))) {
           const rejoinId = msg.rejoinId
-          const entry = buffered.get(rejoinId)!
-          const lobby = registry.get(entry.lobbyCode)
-          const matchActive = lobby
-            ? (sessionsByLobby.get(lobby.code) ?? []).some((s) => s.match.match.status === 'active' && s.match.has(rejoinId))
-            : false
+          const entry = buffered.get(rejoinId)
+          const lobby = entry ? registry.get(entry.lobbyCode) : liveMemberLobby(rejoinId)
+          if (!lobby) {
+            // a stale id that is neither buffered nor a member: fresh start
+            send(conn.ws, { type: 'welcome', selfId: conn.id })
+            return
+          }
+          if (!entry) {
+            const member = lobby.getMember(rejoinId)!
+            member.reconnecting = true
+            buffered.set(rejoinId, {
+              conn,
+              lobbyCode: lobby.code,
+              timer: setTimeout(() => pruneBuffered(rejoinId), reconnectGraceMs),
+            })
+            broadcastRoster(lobby)
+          }
+          const matchActive = (sessionsByLobby.get(lobby.code) ?? []).some((s) => s.match.match.status === 'active' && s.match.has(rejoinId))
           conns.delete(conn.id)
           conn.id = rejoinId
           conns.delete(conn.id)
           conn.id = msg.rejoinId
-          conn.name = sanitizeName(msg.name, entry.conn.name ?? undefined)
+          conn.name = sanitizeName(msg.name, entry?.conn.name ?? undefined)
           conns.set(conn.id, conn)
           // the player is back and holding the choice: restart the grace window
           // from the offer so it can't expire on the disconnect clock while they
           // are still reading the popup (a claimer who never decides is still
           // pruned after one full grace)
-          clearTimeout(entry.timer)
-          entry.timer = setTimeout(() => pruneBuffered(rejoinId), reconnectGraceMs)
-          send(conn.ws, { type: 'rejoin_offer', lobbyCode: entry.lobbyCode, matchActive })
+          if (entry) {
+            clearTimeout(entry.timer)
+            entry.timer = setTimeout(() => pruneBuffered(rejoinId), reconnectGraceMs)
+          }
+          send(conn.ws, { type: 'rejoin_offer', lobbyCode: lobby.code, matchActive })
           send(conn.ws, { type: 'welcome', selfId: conn.id })
           return
         }
@@ -605,12 +639,14 @@ export function startServer(port: number): ServerHandle {
       }
     })
     ws.on('close', () => {
-      // only delete the entry if it still belongs to THIS socket: after a
-      // rejoin-claim, a stale duplicate claimer (second refresh / second tab)
-      // holds the same id, and its close must not yank the live claimer's
-      // routing entry out from under it
-      if (conns.get(conn.id) === conn) conns.delete(conn.id)
-      if (conn.lobbyCode && !buffered.has(conn.id)) {
+      // only act if this socket still owns its id. After a rejoin-claim, a
+      // stale duplicate (second refresh / second tab, or this socket's own
+      // delayed close from a refresh whose new socket was processed first)
+      // holds the same id — its close must not yank the live claimer's routing
+      // entry, and must not re-buffer / re-ghost a member the claimer now owns.
+      const superseded = conns.get(conn.id) !== conn
+      if (!superseded) conns.delete(conn.id)
+      if (!superseded && conn.lobbyCode && !buffered.has(conn.id)) {
         const lobby = registry.get(conn.lobbyCode)
         const member = lobby?.getMember(conn.id)
         if (lobby && member) {

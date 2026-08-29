@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { GameRunner, STEP_MS } from './runner'
+import { BOARD_W } from '../engine/types'
 
 const base = { dir: 0 as const, softDrop: false }
 
@@ -65,6 +66,35 @@ describe('GameRunner buffered input', () => {
     // Hold a direction across several ticking frames with an empty action queue.
     for (let i = 0; i < 5; i++) runner.advance(STEP_MS, { dir: 1 as const, softDrop: false })
     expect(runner.game.active!.x).toBeGreaterThan(start)
+  })
+
+  it('a topped-out run blocks a restored round until reset unblocks it', () => {
+    const runner = new GameRunner({ mode: 'versus', gameOptions: { seed: 1 }, onEnd: () => {} })
+    // cram the playfield so incoming pieces pile up to a top-out
+    for (const y of [3, 4])
+      for (let x = 0; x < BOARD_W; x += 2) runner.game.board[y][x] = 'J'
+    for (let i = 0; i < 90; i++) runner.advance(STEP_MS, base)
+    expect(runner.game.over).toBe(true)
+
+    // a new round's game_start restores a fresh, playable board (as MatchClient does)
+    const snap = runner.game.snapshot()
+    const fresh = snap.board.map(() => Array(BOARD_W).fill(null))
+    runner.game.restore({ ...snap, board: fresh, over: false, score: 0, frames: 0, active: null })
+    const framesBefore = runner.game.frames
+    const placedBefore = runner.game.piecesPlaced
+    runner.queueActions(['hardDrop'])
+    runner.advance(STEP_MS * 2, base)
+    // the finalized runner swallows the whole round (the top-out finalized it): no frames run
+    expect(runner.game.frames).toBe(framesBefore)
+    expect(runner.game.piecesPlaced).toBe(placedBefore)
+
+    // reset un-finalizes the runner for the next round and play resumes
+    runner.reset()
+    runner.advance(STEP_MS, base) // spawn the round's first piece
+    runner.queueActions(['hardDrop'])
+    runner.advance(STEP_MS, base)
+    expect(runner.game.frames).toBeGreaterThan(framesBefore)
+    expect(runner.game.piecesPlaced).toBeGreaterThan(placedBefore)
   })
 
   it('drops buffered actions when clearActions is called (pause)', () => {
