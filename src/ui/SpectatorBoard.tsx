@@ -3,6 +3,7 @@ import { useSettings } from '../state/settings'
 import { renderBoard } from '../render/canvas'
 import { EffectsSystem, type EffectsConfig } from '../render/effects'
 import { ClearPopupRenderer, clearLabels } from '../render/cleartext'
+import { PopupLayer } from '../render/PopupLayer'
 import { detectClearedRows } from '../render/spectator-fx'
 import { HIDDEN_H, type Cell } from '../engine/types'
 import type { ClearInfo, AttackResult } from '../engine/attack'
@@ -23,6 +24,7 @@ export function SpectatorBoard({ board, cell, detail }: { board: Cell[][] | null
   const fxConfig = detail === 'full' ? settings.fx : REDUCED_FX
   const showLabels = detail === 'full' && settings.clearPopups
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
   const prevBoardRef = useRef<Cell[][] | null>(null)
   const lastBoardRef = useRef<Cell[][] | null>(null)
   const fxRef = useRef<EffectsSystem | null>(null)
@@ -51,6 +53,11 @@ export function SpectatorBoard({ board, cell, detail }: { board: Cell[][] | null
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')!
+    // popup VFX draws on a dedicated overlay above the board
+    const overlay = overlayRef.current!
+    overlay.width = canvas.width
+    overlay.height = canvas.height
+    const overlayCtx = overlay.getContext('2d')!
     const fx = new EffectsSystem(fxConfig)
     fx.setShakeEnabled(false)
     fxRef.current = fx
@@ -67,7 +74,8 @@ export function SpectatorBoard({ board, cell, detail }: { board: Cell[][] | null
       fx.update(dt)
       fx.draw(ctx)
       fx.drawOverlay(ctx, canvas.width, canvas.height, t)
-      if (showLabels) popups.draw(ctx, canvas.width, canvas.height, t)
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height)
+      if (showLabels) popups.draw(overlayCtx, overlay.width, overlay.height, t)
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
@@ -77,5 +85,10 @@ export function SpectatorBoard({ board, cell, detail }: { board: Cell[][] | null
     }
   }, [cell, detail, fxConfig, showLabels])
 
-  return <canvas ref={canvasRef} width={10 * cell} height={20 * cell} className="border border-neutral-800" />
+  return (
+    <div className="relative border border-neutral-800">
+      <canvas ref={canvasRef} width={10 * cell} height={20 * cell} className="block" />
+      <PopupLayer ref={overlayRef} />
+    </div>
+  )
 }

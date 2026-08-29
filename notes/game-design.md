@@ -32,7 +32,7 @@ Reference for modern Tetris guideline mechanics as implemented in tetris-relinke
 ## Zero line clear delay
 
 - Cleared rows disappear immediately; gravity of the stack above applies on the same frame the piece locks.
-- No animation pause between lock and next piece control. Particles are purely cosmetic overlays.
+- No animation pause between lock and next piece control. Particles are purely cosmetic overlays; clear-label and send-number popups draw on a dedicated `PopupLayer` canvas above the board so they are never clipped at the board edge or hidden behind side panels.
 
 ## Scoring (guideline)
 
@@ -67,7 +67,7 @@ Non-clearing placements and plain singles send nothing.
 ### Combo
 
 - Each consecutive placement that clears lines increments combo; a non-clearing placement resets it to 0.
-- Combo adds a multiplier on garbage sent. Curve is configurable; default suggestion: `1 + combo * 0.25` capped, or a table like [0,0,1,1,2,...]. Decide during implementation, keep it data-driven.
+- Attack scales exactly as `floor(base * (1 + 0.25 * combo))` with **no cap** (larger bases gain more absolute lines per combo step). Zero-base attacks (e.g. singles with a 0 table value) instead grow via `floor(ln(1 + 1.25 * combo))` from the 2-combo on, so long chains of weak clears eventually send something. Same formula on client and server (shared `computeAttack`).
 
 ### Streak
 
@@ -86,8 +86,8 @@ Non-clearing placements and plain singles send nothing.
 
 ## AI opponent
 
-- Use MinusKelvin's cold-clear-2 (https://github.com/MinusKelvin/cold-clear-2), Rust -> WASM. No custom AI. (The original cold-clear is archived; cold-clear-2 is the active rewrite, MIT/Apache-2.0, and implements the Tetris Bot Protocol.)
-- Run it on a Web Worker if integration allows, so the main thread keeps 60fps. Its multithreaded search needs wasm-bindgen-rayon + COOP/COEP headers, or a threads=1 fallback in the wrapper build.
+- Uses MinusKelvin's cold-clear-2 (https://github.com/MinusKelvin/cold-clear-2), Rust -> WASM. No custom AI. (The original cold-clear is archived; cold-clear-2 is the active rewrite, MIT/Apache-2.0, and implements the Tetris Bot Protocol.)
+- Runs on a Web Worker so the main thread keeps 60fps; single-threaded by design, so no COOP/COEP headers or SharedArrayBuffer are needed (see tech-stack.md for the vendored build).
 
 ### Bot modes & training profiles
 
@@ -107,6 +107,10 @@ The AI's speed is adjustable in two ways:
 - **Fixed PPS**: a direct pieces-per-second setting; the AI places pieces at that rate regardless of the game state.
 - **Adaptive mode**: the AI's target PPS shifts based on how the player is doing — e.g., scaling up when the player is ahead (low stack height / few garbage rows received) and easing off when the player is behind. The mapping from player state to AI speed should be data-driven and configurable (same config object as the attack table).
 
+## Four-wide mode
+
+A variant toggle for zen and multiplayer lobbies: grey `W` walls fill the side columns (0-2 and 7-9), leaving a 4-cell-wide well (3-6). A row clears when the centre 4 fill (the sides are always occupied); fresh rows re-lay the walls; perfect clears are impossible by design. Garbage/cheese holes are clamped into the well. Server authorities are walled too and reject placements into the wall.
+
 ## Zen mode
 
 Endless practice mode with an in-game settings sidebar and persistent progression.
@@ -118,5 +122,17 @@ Endless practice mode with an in-game settings sidebar and persistent progressio
   - *Backfire* (0.5x / 1x / 2x): your attack lines are multiplied and queued back into your board after a placement without a clear; only the surplus attack (the lines actually sent after cancelling pending garbage) comes back, and it can be cancelled by later clears.
   - *Unclear* (0.5x / 1x / 2x): multiplied attack lines are pushed into your board instantly on clear.
   - *Cheese layer*: the bottom 6 rows are always garbage lines with one random hole each; holes stay stable while a row remains cheese, and rows eaten by clears regenerate as fresh cheese.
+- **Four-wide** toggle: grey walls fill the side columns, leaving a 4-cell well.
 - A thin red meter beside the board shows pending incoming garbage.
 - **Progression**: every point scored flows into a persisted XP total at all times. Level requirements scale linearly (`base * level`); the level is shown next to the menu entry and level/XP below the board during play.
+
+## Multiplayer
+
+Server-hosted lobbies and live matches over WebSockets; the server is authoritative for room settings, attack values, targeting, and every player's board (see architecture.md for the netcode model).
+
+- **Matches are series of games** decided by games won, never lines sent. Each game is last-man-standing: a top-out eliminates the player for that game; one survivor wins it. End conditions: **first-to-X** (a player reaches X wins) or **win-by-X** (a player leads by at least X). A simultaneous final top-out is a draw — no win awarded, the game replayed. Disconnects forfeit the current game; leavers are removed permanently. Match logic lives in `src/engine/match.ts`.
+- **Rounds**: after each game an intermission scoreboard shows the round winner (+1) and the running match score, then the next game starts automatically; players with enough wins get a MATCH POINT marker.
+- **Garbage targeting** (per player, reset each game): *manual* (attacks go to the clicked opponent; if they die, auto-reassign to a random living opponent, mode kept), *revenge* (most recent living attacker, falling back down history then to random), *random* (uniform re-roll per attack). With one living opponent all modes route to them. The server owns targeting state and broadcasts target updates so all clients agree.
+- **Garbage routing**: a clear's attack first cancels pending incoming garbage on the attacker (only cancellable garbage; surplus beyond pending is forwarded), then the remaining lines route to the target. Garbage arrives on a placement **without** a clear.
+- **Reconnect**: an unexpected disconnect buffers the player for a grace window (sat out of the game, never targeted); a refresh offers rejoin via the persisted per-tab `selfId`. **Spectate/AFK**: players toggle PLAY/SPECTATE mid-match (spectators never targeted, can't win), auto-spectate on death in N>2 games, and two-step leave (AFK, then gone) with return-to-game.
+- **Desync handling**: the server reconstructs each board from the cells every `lock` carries and cross-checks throttled snapshots — a match is acked, a genuine divergence gets a corrective `resync`. Anti-corruption rule: a resync only fires on real divergence, never a blind overwrite (a lost/duplicated message surfaces on the authority board and is healed via resync).

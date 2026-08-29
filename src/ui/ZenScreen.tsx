@@ -7,6 +7,7 @@ import { useZen, zenLevelInfo, type GarbageMode, type GarbageMultiplier } from '
 import { renderBoard, drawMiniPiece, PIECE_COLORS } from '../render/canvas'
 import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, SendPopupRenderer, clearLabels } from '../render/cleartext'
+import { PopupLayer } from '../render/PopupLayer'
 import { cellsFor } from '../engine/pieces'
 import { HIDDEN_H, type Cell } from '../engine/types'
 import { bumpiness, columnHeights, countHoles } from '../engine/stackstats'
@@ -82,6 +83,7 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
   })
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
   const holdRef = useRef<HTMLCanvasElement>(null)
   const nextRef = useRef<HTMLCanvasElement>(null)
   const gameRef = useRef<Game | null>(null)
@@ -101,6 +103,11 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
   useEffect(() => {
     const canvas = canvasRef.current!
     const ctx = canvas.getContext('2d')!
+    // popup VFX draws on a dedicated overlay above the board and side panels
+    const overlay = overlayRef.current!
+    overlay.width = canvas.width
+    overlay.height = canvas.height
+    const overlayCtx = overlay.getContext('2d')!
     const holdCtx = holdRef.current!.getContext('2d')!
     const nextCtx = nextRef.current!.getContext('2d')!
 
@@ -327,8 +334,9 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
       fx.update(dt / 1000)
       fx.draw(ctx)
       fx.drawOverlay(ctx, canvas.width, canvas.height, t)
-      if (settings.clearPopups) popups.draw(ctx, canvas.width, canvas.height, t)
-      if (settings.fx.sendPopups) sendPopups.draw(ctx, canvas.width, canvas.height, t)
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height)
+      if (settings.clearPopups) popups.draw(overlayCtx, overlay.width, overlay.height, t)
+      if (settings.fx.sendPopups) sendPopups.draw(overlayCtx, overlay.width, overlay.height, t)
 
       if (assistActiveRef.current && zenRef.current.assist && !pausedLocal && !done) {
         const g = runner.game
@@ -490,7 +498,10 @@ export function ZenScreen({ onExit }: { onExit: () => void }) {
 
       <div className="flex flex-col items-center gap-2">
         <div className="flex items-start">
-          <canvas ref={canvasRef} width={300} height={600} className="border border-neutral-700" />
+          <div className="relative border border-neutral-700">
+            <canvas ref={canvasRef} width={300} height={600} className="block" />
+            <PopupLayer ref={overlayRef} />
+          </div>
           {zenSettings.garbage !== 'none' && (
             <div className="ml-1">
               <GarbageMeter amount={hud.incoming} />

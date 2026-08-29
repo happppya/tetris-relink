@@ -8,6 +8,7 @@ import { useStats } from '../state/stats'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
 import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, SendPopupRenderer, clearLabels } from '../render/cleartext'
+import { PopupLayer } from '../render/PopupLayer'
 import type { GameEvent } from '../engine/game'
 import { formatTime, formatNum } from './format'
 import { StreakBox } from './StreakBox'
@@ -83,6 +84,7 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
   })
 
   const playerCanvasRef = useRef<HTMLCanvasElement>(null)
+  const playerOverlayRef = useRef<HTMLCanvasElement>(null)
   const playerHoldRef = useRef<HTMLCanvasElement>(null)
   const playerNextRef = useRef<HTMLCanvasElement>(null)
   const aiCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -91,6 +93,11 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
 
   useEffect(() => {
     const pCtx = playerCanvasRef.current!.getContext('2d')!
+    // popup VFX draws on a dedicated overlay above the board and side panels
+    const overlay = playerOverlayRef.current!
+    overlay.width = playerCanvasRef.current!.width
+    overlay.height = playerCanvasRef.current!.height
+    const overlayCtx = overlay.getContext('2d')!
     const aCtx = aiCanvasRef.current!.getContext('2d')!
     const pHoldCtx = playerHoldRef.current!.getContext('2d')!
     const pNextCtx = playerNextRef.current!.getContext('2d')!
@@ -233,11 +240,12 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
       fx.draw(pCtx)
       fx.drawOverlay(pCtx, pCtx.canvas.width, pCtx.canvas.height, t)
 
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height)
       if (settings.clearPopups) {
-        popups.draw(pCtx, pCtx.canvas.width, pCtx.canvas.height, t)
+        popups.draw(overlayCtx, overlay.width, overlay.height, t)
       }
       if (settings.fx.sendPopups) {
-        sendPopups.draw(pCtx, pCtx.canvas.width, pCtx.canvas.height, t)
+        sendPopups.draw(overlayCtx, overlay.width, overlay.height, t)
       }
 
       fx.applyShake(playerCanvasRef.current!, t)
@@ -314,7 +322,10 @@ export function VersusScreen({ onExit }: { onExit: () => void }) {
       {/* next queue sits flush against the top right of the player's board */}
       <div className="flex items-start">
         <div className="flex">
-          <canvas ref={playerCanvasRef} width={300} height={600} className="border border-neutral-700" />
+          <div className="relative border border-neutral-700">
+            <canvas ref={playerCanvasRef} width={300} height={600} className="block" />
+            <PopupLayer ref={playerOverlayRef} />
+          </div>
           <div className="ml-1">
             <GarbageMeter amount={playerHud.incoming} />
           </div>

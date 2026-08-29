@@ -23,6 +23,8 @@ interface Popup {
 const LIFE_MS = 1100
 const BIG = new Set(['TETRIS', 'PERFECT CLEAR'])
 
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi))
+
 export class ClearPopupRenderer {
   private popups: Popup[] = []
 
@@ -42,7 +44,7 @@ export class ClearPopupRenderer {
       const pop = Math.max(0, 1 - age * 8)
       const size = (BIG.has(text) || text.includes('SPIN') ? 30 : 22) + pop * 6
       const x = w / 2
-      const y = h * 0.32 + i * 34 - age * 24
+      const y = clamp(h * 0.32 + i * 34 - age * 24, 10, h - 10)
       ctx.globalAlpha = alpha
       ctx.font = `bold ${size}px ui-monospace, monospace`
       ctx.lineWidth = 4
@@ -131,7 +133,7 @@ export class SendPopupRenderer {
     this.comboTotal = 0
   }
 
-  draw(ctx: CanvasRenderingContext2D, _w: number, _h: number, now: number) {
+  draw(ctx: CanvasRenderingContext2D, w: number, h: number, now: number) {
     if (!this.popups.length) return
     this.popups = this.popups.filter((p) => now - p.bornAt < SEND_LIFE_MS)
     if (!this.popups.length) return
@@ -146,8 +148,6 @@ export class SendPopupRenderer {
       const pop = Math.max(0, 1 - age * 10)
       const n = p.number
       const size = (46 + Math.min(n, 24) * 1.6) * (1 + pop * 0.55)
-      const x = p.x
-      const y = p.y - age * 34
 
       // magnitude-scaled text color: bigger sends burn hotter
       const textColor = n >= 16 ? '#ff8a5c' : n >= 10 ? '#ffd966' : n >= 6 ? '#fff3c4' : '#ffffff'
@@ -156,6 +156,11 @@ export class SendPopupRenderer {
 
       ctx.globalAlpha = alpha
       ctx.font = `bold ${Math.round(size)}px ui-monospace, monospace`
+      // keep the popup fully on-screen even for edge clears: clamp x to the
+      // text width and y so the x-combo/STREAK tags below stay visible too
+      const tw = ctx.measureText(String(n)).width
+      const x = clamp(p.x, tw / 2 + 4, w - tw / 2 - 4)
+      const y = clamp(p.y - age * 34, 12, h - 100)
       ctx.lineWidth = Math.max(4, size * 0.12)
       ctx.strokeStyle = '#000000'
       ctx.strokeText(String(n), x, y)

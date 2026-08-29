@@ -8,6 +8,7 @@ import {
 } from './cleartext'
 import { EffectsSystem, FX_PRESETS, effectsConfigFromLevel, presetFromConfig, type EffectsConfig } from './effects'
 import type { AttackResult } from '../engine/attack'
+import { HIDDEN_H, TOTAL_H } from '../engine/types'
 
 function mockCtx() {
   const calls = {
@@ -26,6 +27,7 @@ function mockCtx() {
     fillRect: () => {},
     strokeText: () => {},
     fillText: (text: string, x: number, y: number) => calls.fillText.push({ text, x, y }),
+    measureText: (text: string) => ({ width: text.length * 8 }),
     createRadialGradient: () => {
       calls.radialGradients++
       return { addColorStop: () => {} }
@@ -151,6 +153,19 @@ describe('SendPopupRenderer', () => {
     // distinct consecutive colors for at least the first four combo steps
     const firstFour = new Set(COMBO_GLOW.slice(0, 4))
     expect(firstFour.size).toBe(4)
+  })
+
+  it('clamps edge popups into view instead of clipping them', () => {
+    const r = new SendPopupRenderer()
+    // a top-row clear anchors above the canvas (y = -16) and would be cut off
+    r.push(attack(4), 1, 0, [HIDDEN_H], 4, CELL)
+    // a bottom-row clear anchors at y=554; the tags below the number need headroom
+    r.push(attack(4), 2, 50, [TOTAL_H - 1], 4, CELL)
+    const { ctx, calls } = mockCtx()
+    r.draw(ctx, 300, 600, 100)
+    const ys = calls.fillText.filter((c) => c.text === '4').map((c) => c.y)
+    expect(Math.min(...ys)).toBeGreaterThanOrEqual(12)
+    expect(Math.max(...ys)).toBeLessThanOrEqual(600 - 100)
   })
 })
 

@@ -9,6 +9,7 @@ import { renderBoard, drawMiniPiece } from '../render/canvas'
 import { SpectatorBoard } from './SpectatorBoard'
 import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, SendPopupRenderer, clearLabels } from '../render/cleartext'
+import { PopupLayer } from '../render/PopupLayer'
 import { GarbageMeter } from './GarbageMeter'
 import { StreakBox } from './StreakBox'
 import { formatNum } from './format'
@@ -190,6 +191,7 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
   // combo/hold/streak state). The loop reads the live value from this ref.
   const targetModeRef = useRef<TargetMode>('random')
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
   const holdRef = useRef<HTMLCanvasElement>(null)
   const nextRef = useRef<HTMLCanvasElement>(null)
   const aiHoldRef = useRef<HTMLCanvasElement>(null)
@@ -315,15 +317,21 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
       }
       // the playing layout unmounts while spectating, so the canvases may be
       // gone — re-acquire contexts fresh each frame to survive remounts
-      if (!spectatingRef.current && canvasRef.current && holdRef.current && nextRef.current) {
+      if (!spectatingRef.current && canvasRef.current && overlayRef.current && holdRef.current && nextRef.current) {
         const g = runner.game
         const ctx = canvasRef.current.getContext('2d')!
         renderBoard(ctx, g.board, g.active, g.ghostPiece, { cellSize: CELL, showGhost: settings.ghost })
         fx.update(dt / 1000)
         fx.draw(ctx)
         fx.drawOverlay(ctx, canvasRef.current.width, canvasRef.current.height, t)
-        if (settings.clearPopups) popups.draw(ctx, canvasRef.current.width, canvasRef.current.height, t)
-        if (settings.fx.sendPopups) sendPopups.draw(ctx, canvasRef.current.width, canvasRef.current.height, t)
+        // popup VFX draws on a dedicated overlay above the board and side panels
+        const overlay = overlayRef.current
+        if (overlay.width !== canvasRef.current.width) overlay.width = canvasRef.current.width
+        if (overlay.height !== canvasRef.current.height) overlay.height = canvasRef.current.height
+        const overlayCtx = overlay.getContext('2d')!
+        overlayCtx.clearRect(0, 0, overlay.width, overlay.height)
+        if (settings.clearPopups) popups.draw(overlayCtx, overlay.width, overlay.height, t)
+        if (settings.fx.sendPopups) sendPopups.draw(overlayCtx, overlay.width, overlay.height, t)
         fx.applyShake(canvasRef.current, t)
         const holdCtx = holdRef.current.getContext('2d')!
         holdCtx.clearRect(0, 0, holdCtx.canvas.width, holdCtx.canvas.height)
@@ -471,7 +479,10 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
 
       <div className="flex items-start">
         <div className="flex">
-          <canvas ref={canvasRef} width={300} height={600} className="border border-neutral-700" />
+          <div className="relative border border-neutral-700">
+            <canvas ref={canvasRef} width={300} height={600} className="block" />
+            <PopupLayer ref={overlayRef} />
+          </div>
           <div className="ml-1">
             <GarbageMeter amount={hud.incoming} />
           </div>

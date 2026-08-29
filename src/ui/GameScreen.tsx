@@ -6,6 +6,7 @@ import { useStats } from '../state/stats'
 import { renderBoard, drawMiniPiece } from '../render/canvas'
 import { EffectsSystem } from '../render/effects'
 import { ClearPopupRenderer, SendPopupRenderer, clearLabels } from '../render/cleartext'
+import { PopupLayer } from '../render/PopupLayer'
 import type { GameEvent } from '../engine/game'
 import { formatTime, formatNum } from './format'
 import { StreakBox } from './StreakBox'
@@ -37,6 +38,7 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
   const [blitzLeftMs, setBlitzLeftMs] = useState((blitzDuration ?? 0) * 1000)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
   const holdRef = useRef<HTMLCanvasElement>(null)
   const nextRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -44,6 +46,11 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
   useEffect(() => {
     const canvas = canvasRef.current!
     const ctx = canvas.getContext('2d')!
+    // popup VFX draws on a dedicated overlay above the board and side panels
+    const overlay = overlayRef.current!
+    overlay.width = canvas.width
+    overlay.height = canvas.height
+    const overlayCtx = overlay.getContext('2d')!
     const holdCtx = holdRef.current!.getContext('2d')!
     const nextCtx = nextRef.current!.getContext('2d')!
 
@@ -131,11 +138,12 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
       fx.draw(ctx)
       fx.drawOverlay(ctx, canvas.width, canvas.height, t)
 
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height)
       if (settings.clearPopups) {
-        popups.draw(ctx, canvas.width, canvas.height, t)
+        popups.draw(overlayCtx, overlay.width, overlay.height, t)
       }
       if (settings.fx.sendPopups) {
-        sendPopups.draw(ctx, canvas.width, canvas.height, t)
+        sendPopups.draw(overlayCtx, overlay.width, overlay.height, t)
       }
 
       fx.applyShake(canvas, t)
@@ -201,7 +209,10 @@ export function GameScreen({ mode, blitzDuration, onExit }: Props) {
       </aside>
 
       <div ref={wrapRef} className="flex items-start">
-        <canvas ref={canvasRef} width={300} height={600} className="border border-neutral-700" />
+        <div className="relative border border-neutral-700">
+          <canvas ref={canvasRef} width={300} height={600} className="block" />
+          <PopupLayer ref={overlayRef} />
+        </div>
         <div className="ml-2">
           <h2 className="mb-1 font-mono text-xs tracking-widest text-neutral-500">NEXT</h2>
           <canvas ref={nextRef} width={120} height={230} className="border border-neutral-800" />

@@ -4,17 +4,17 @@ Guidance for AI coding agents working in this repository.
 
 ## Project overview
 
-Fully frontend, singleplayer **modern Tetris** application (React + TypeScript + Tailwind, canvas playfield). See `notes/tech-stack.md` for the stack and rationale.
+**Modern Tetris** game: a React + TypeScript + Tailwind client with a canvas playfield, plus a Node + `ws` multiplayer server (`server/`). See `notes/tech-stack.md` for the stack and rationale and `notes/architecture.md` for the module layout and multiplayer model.
 
 ## Notes directory — read these before working
 
+The singleplayer and multiplayer feature sets are both shipped; there is no requirement checklist anymore. The docs below are the current reference.
+
 | File | When to consult |
 |---|---|
-| `notes/todo.md` | **Always start here.** Full requirement list with status. Check off items as you complete them; do not remove requirements. |
-| `notes/game-design.md` | Before implementing or changing any game mechanic (SRS, 7-bag, DAS/ARR/SDF, scoring, lock delay, zero line clear delay). |
-| `notes/architecture.md` | Before adding files/modules. Follow the layer rules (`engine/` is pure TS with no React/DOM imports). |
+| `notes/game-design.md` | Before implementing or changing any game mechanic (SRS, 7-bag, DAS/ARR/SDF, scoring, lock delay, zero line clear delay, four-wide, zen garbage modes, multiplayer targeting). |
+| `notes/architecture.md` | Before adding files/modules. Follow the layer rules (`engine/` is pure TS with no React/DOM imports) and the multiplayer model (server authority, resync rules, protocol single source of truth). |
 | `notes/tech-stack.md` | Before adding any dependency or tooling. Do not introduce libraries not recorded here without updating this file first. |
-| `notes/multiplayer-plan.md` | Before touching anything multiplayer (server, protocol, lobbies, match flow). Records the architecture, protocol catalog, and phased work plan. |
 
 ## Hard rules
 
@@ -28,7 +28,6 @@ Fully frontend, singleplayer **modern Tetris** application (React + TypeScript +
 
 ## Workflow expectations
 
-- Update `notes/todo.md` status markers (`[ ]`, `[~]`, `[x]`) as work progresses.
 - Unit-test engine changes (bag distribution, kick tables, timing) with Vitest once scaffolding exists.
 - Server logic lives in `server/` as pure TS (no framework); keep the socket layer thin and unit-test the logic. Run the server with `npm run server` (plain `node server/index.ts` — Node 22.18+ type stripping; imports of TS files must use explicit `.ts` extensions).
 - Fast multiplayer verification uses real ephemeral WebSockets, not the browser preview: `npm run test:multiplayer` runs the two-client and message-loss contracts; `server/test-client.ts` is the shared simulator and must be reused by socket tests.
