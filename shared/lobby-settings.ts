@@ -36,7 +36,8 @@ export function describeLobbySettings(s: LobbySettings): string {
  */
 export function isMatchPoint(wins: Record<string, number>, settings: LobbySettings, playerId: string): boolean {
   const mine = wins[playerId] ?? 0
-  if (settings.mode === 'firstToX') return mine >= settings.goal - 1
+  if (settings.mode === 'firstToX') return mine >= settings.goal - 1 && mine < settings.goal
   const bestOther = Math.max(0, ...Object.entries(wins).filter(([id]) => id !== playerId).map(([, v]) => v))
-  return mine + 1 - bestOther >= settings.winBy
+  // one more win must clinch the match, and the match must not already be won
+  return mine + 1 - bestOther >= settings.winBy && mine - bestOther < settings.winBy
 }

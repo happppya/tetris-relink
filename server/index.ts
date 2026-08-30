@@ -5,7 +5,8 @@ import { WebSocketServer, WebSocket } from 'ws'
 import { LobbyRegistry } from './registry.ts'
 import { Lobby, MAX_PLAYERS, type Member } from './lobby.ts'
 import { MatchSession } from './match-session.ts'
-import type { Match, MatchEvent } from '../src/engine/match.ts'
+import type { MatchEvent } from '../src/engine/match.ts'
+import { roundScores } from './round-scores.ts'
 import { sanitizeLobbySettings, sanitizeName } from '../shared/lobby-settings.ts'
 import type { ClientMessage, LobbyState, ServerMessage, Visibility } from '../shared/protocol.ts'
 
@@ -189,17 +190,6 @@ export function startServer(port: number): ServerHandle {
       if (i >= 0) list.splice(i, 1)
       if (list.length === 0) sessionsByLobby.delete(entry.lobbyCode)
     }
-  }
-
-  /**
-   * The intermission round score: ONLY the round outcome — the round's winner
-   * gets +1 and everyone else 0 (a draw gives everyone 0). No attack lines,
-   * no accumulated engine score.
-   */
-  const roundScores = (match: Match, winnerId: string | null): Record<string, number> => {
-    const out: Record<string, number> = {}
-    for (const p of match.playerList) out[p.id] = p.id === winnerId ? 1 : 0
-    return out
   }
 
   /**

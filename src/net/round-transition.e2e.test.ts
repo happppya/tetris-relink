@@ -167,11 +167,12 @@ describe('round transitions through the real GameRunner (game screen flow)', () 
       expect(pa.client.getState().finished).toBe(false)
       expect(pb.client.getState().finished).toBe(false)
 
-      // the scoreboard shows ONLY the round outcome: winner +1, everyone else 0
+      // the scoreboard shows the running match score (rounds won), matching the
+      // wins tally and putting the winner at the current round count
       const inter = pa.client.getState().intermission
       expect(inter).not.toBeNull()
       expect(inter!.winnerId).toBe(a.store.getState().selfId)
-      expect(inter!.scores[a.store.getState().selfId!]).toBe(1)
+      expect(inter!.scores[a.store.getState().selfId!]).toBe(round)
       expect(inter!.scores[b.store.getState().selfId!]).toBe(0)
       expect(inter!.wins[a.store.getState().selfId!]).toBe(round)
 
@@ -272,7 +273,8 @@ describe('round transitions through the real GameRunner (game screen flow)', () 
     expect(pa.client.getState().finished).toBe(false)
     expect(pb.client.getState().finished).toBe(false)
 
-    // the intermission shows ONLY the round outcome: the round's winner +1, everyone else 0
+    // the intermission shows the running match score (wins): A's round-1 win
+    // is 1, everyone else 0
     const inter = pa.client.getState().intermission
     expect(inter).not.toBeNull()
     expect(inter!.winnerId).toBe(aId)

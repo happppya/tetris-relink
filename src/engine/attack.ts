@@ -13,6 +13,9 @@ export interface AttackConfig {
   streakThreshold: number
 }
 
+/** how many queued garbage rows land on a single non-clearing placement (the rest stay owed) */
+export const GARBAGE_PER_PLACEMENT = 8
+
 export const DEFAULT_ATTACK: AttackConfig = {
   single: 0,
   double: 1,

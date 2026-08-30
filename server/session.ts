@@ -141,7 +141,10 @@ export class Session {
     // queueGarbage clamps the hole into the playable region (centre 4 in
     // four-wide) and returns it, so the event the client applies matches the
     // server's own board exactly
-    const hole = queueGarbage(target.auth, surplus, 0)
+    // pick a random hole so garbage doesn't always arrive in the left-most
+    // column; queueGarbage clamps it into the playable region (centre 4 in
+    // four-wide) and returns the clamped value the client must apply too
+    const hole = queueGarbage(target.auth, surplus, this.randomHole())
     target.attackers = [byId, ...target.attackers.filter((id) => id !== byId)]
     return [
       { type: 'garbage', to: targetId, lines: surplus, hole, from: byId },
@@ -174,6 +177,10 @@ export class Session {
       player.manualTarget = player.manualTarget === id ? null : player.manualTarget
       player.attackers = player.attackers.filter((attacker) => attacker !== id)
     }
+  }
+
+  private randomHole(): number {
+    return this.settings.fourWide ? 3 + ((Math.random() * 4) | 0) : (Math.random() * 10) | 0
   }
 
   private targetFor(player: PlayerState, byId: string): string | null {

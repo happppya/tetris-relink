@@ -59,8 +59,13 @@ describe('Session', () => {
   it('computes the attack from the room table and routes it to a target', () => {
     const s = makeSession()
     const events = s.move('a', tetris)
-    expect(events).toContainEqual({ type: 'garbage', to: 'b', lines: 4, hole: 0, from: 'a' })
-    expect(events[0]).toMatchObject({ type: 'garbage' })
+    expect(events[0]).toMatchObject({ type: 'garbage', to: 'b', lines: 4, from: 'a' })
+    const g = events.find((e) => e.type === 'garbage')
+    if (g && g.type === 'garbage') {
+      // the hole is randomized across the board width, never pinned to 0
+      expect(g.hole).toBeGreaterThanOrEqual(0)
+      expect(g.hole).toBeLessThanOrEqual(9)
+    }
   })
 
   it('sends nothing for a non-attacking placement', () => {
@@ -135,7 +140,13 @@ describe('Session', () => {
     expect(s.activePlayerCount()).toBe(2)
     expect(s.spectatorIds()).toEqual(['c'])
     // a's attack must route to b (the only non-spectating opponent)
-    expect(s.move('a', tetris)).toContainEqual({ type: 'garbage', to: 'b', lines: 4, hole: 0, from: 'a' })
+    const route = s.move('a', tetris)
+    expect(route[0]).toMatchObject({ type: 'garbage', to: 'b', lines: 4, from: 'a' })
+    const hole = route.find((e) => e.type === 'garbage')
+    if (hole && hole.type === 'garbage') {
+      expect(hole.hole).toBeGreaterThanOrEqual(0)
+      expect(hole.hole).toBeLessThanOrEqual(9)
+    }
     // a spectator's own attack is not routed anywhere
     expect(s.move('c', tetris)).toEqual([])
     // toggling back restores eligibility

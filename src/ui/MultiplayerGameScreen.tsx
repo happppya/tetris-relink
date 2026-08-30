@@ -88,6 +88,7 @@ function IntermissionOverlay({ intermission, players, settings, final = false }:
                 <span className="w-4 shrink-0 text-neutral-600">{i + 1}</span>
                 <span className="truncate">{r.name}</span>
                 {r.id === intermission.winnerId && <span>✓</span>}
+                {final && r.id === intermission.winnerId && <span className="shrink-0 text-[10px] tracking-widest text-green-400">WINNER</span>}
                 {r.mp && <span className="shrink-0 text-[10px] tracking-widest text-yellow-400">MATCH POINT</span>}
               </span>
               <span className="shrink-0 text-neutral-200">{r.score.toLocaleString()}</span>
@@ -294,6 +295,10 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
       const dt = t - last
       last = t
       const ctrl = drainFrame(input, runner)
+      // the intermission scoreboard blocks input: drain-but-discard spends any
+      // key pressed while it is up so it can't place a piece when play resumes
+      // ("the game only starts after the scoreboard disappears")
+      if (intermissionRef.current) runner.clearActions()
       if (ctrl.pause) {
         paused = !paused
         if (paused) runner.clearActions()

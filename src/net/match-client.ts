@@ -274,6 +274,7 @@ export class MatchClient {
             lines: 0,
             piecesPlaced: 0,
             frames: 0,
+            sentLines: 0,
             over: false,
             garbageQueue: [],
             hold: null,

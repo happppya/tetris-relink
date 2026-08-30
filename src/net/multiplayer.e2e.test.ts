@@ -148,9 +148,12 @@ describe('real client stack against the real server', () => {
     // 10-line perfect-clear bonus — routed to B through the real server
     await waitFor(() => playerB.game.pendingGarbage === 10, 'B receives garbage')
 
-    // B lands a non-clearing piece so the queued garbage lands on the board
+    // B lands non-clearing pieces so the queued garbage lands: at most 8 rows
+    // per placement, so it takes two placements to drain the 10-line attack
     tick(playerB, ['hardDrop'])
     expect(playerB.game.lines).toBe(0)
+    await waitFor(() => playerB.game.pendingGarbage === 2, 'B garbage capped at 8')
+    tick(playerB, ['hardDrop']) // delivers the remaining 2
     await waitFor(() => playerB.game.pendingGarbage === 0, 'B garbage applied')
     // advance B's frame counter so its snapshot crosses the 30-frame cadence
     tick(playerB, [], 0, 30)

@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { startServer, type ServerHandle } from './index.ts'
 import { LossyProxy } from './lossyproxy.ts'
 import { emptyBoard, serializeBoard } from '../shared/board.ts'
-import { applyLock, createAuthority, queueGarbage } from './authority.ts'
+import { applyLock, createAuthority } from './authority.ts'
 import type { LobbyState, ServerMessage } from '../shared/protocol.ts'
 
 const lobbyStateOf = (m: ServerMessage): LobbyState => (m as { type: 'lobby_state'; lobby: LobbyState }).lobby
@@ -71,21 +71,27 @@ describe('message loss over the proxy', () => {
     })
     await new Promise((resolve) => setTimeout(resolve, 100))
 
-    // Replicate the server's own authority steps for the guest: the host's clear
-    // lock forwards surplus garbage that the session enqueues on the guest, then
-    // the guest's non-clearing lock applies that queued garbage to the board.
+    // Replicate the server's own authority for the host: the clear lock forwards
+    // surplus garbage (a tetris, 4 rows) that the session enqueues on the guest,
+    // then the guest's non-clearing lock applies it to the guest's authority.
     const hostSide = createAuthority()
     const hostLock = applyLock(hostSide, { cells: clearCells, rows: 4, spin: 'none', piece: 'I', combo: 0, b2b: false, streak: 0 })
-    const guestSide = createAuthority()
-    queueGarbage(guestSide, hostLock.surplus, 0)
-    applyLock(guestSide, { cells: nonClearCells, rows: 1, spin: 'none', piece: 'T', combo: 0, b2b: false, streak: 0 })
+    const surplus = hostLock.surplus
+    const heap = surplus - 8 // with the cap, only 8 of the 10 land here; 2 stay owed
     const resync = guest.waitFor('resync')
     guest.send({ type: 'snapshot', board: serializeBoard(emptyBoard()), score: 0, seq: 1, matchId })
     const healed = await resync
     // Real correction: the client is told the authoritative board now contains the
-    // garbage it never received, so nothing is silently lost.
-    expect(healed.board).toBe(serializeBoard(guestSide.board))
-    expect(healed.pendingGarbage).toBe(0)
+    // garbage it never received (the applied 8 rows), with the capped remainder
+    // still owed — so nothing is silently lost. (The hole is randomized per row,
+    // so assert structure rather than an exact hole.)
+    expect(healed.pendingGarbage).toBe(heap)
+    const rows = healed.board.split('/')
+    expect(rows.length).toBe(20)
+    for (const row of rows.slice(-surplus + heap)) {
+      expect(row).toHaveLength(10)
+      expect(row.replaceAll('G', '')).toBe('.') // exactly one hole per garbage row
+    }
 
     await host.close()
     await guest.close()

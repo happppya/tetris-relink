@@ -1,4 +1,4 @@
-import { computeAttack, DEFAULT_ATTACK, type AttackConfig, type ClearInfo, type SpinKind } from '../src/engine/attack.ts'
+import { GARBAGE_PER_PLACEMENT, computeAttack, DEFAULT_ATTACK, type AttackConfig, type ClearInfo, type SpinKind } from '../src/engine/attack.ts'
 import type { PieceType } from '../src/engine/types.ts'
 import { serializeBoard, type BoardCell } from '../shared/board.ts'
 
@@ -157,18 +157,24 @@ function cancelToSurplus(a: BoardAuthority, pool: number): number {
   return pool
 }
 
+// The authoritative mirror of the engine's delivery rule: at most
+// GARBAGE_PER_PLACEMENT rows land on one non-clearing placement, so the server
+// board and the client agree on how many remaining rows are still owed.
 function applyQueued(a: BoardAuthority): number {
   let total = 0
   for (const g of a.queue) {
-    total += g.rows
-    for (let i = 0; i < g.rows; i++) {
+    const take = Math.min(g.rows, GARBAGE_PER_PLACEMENT - total)
+    if (take <= 0) break
+    for (let i = 0; i < take; i++) {
       const row = Array<BoardCell>(AUTH_W).fill('G')
       row[clampHole(a, g.hole)] = null
       a.board.shift()
       a.board.push(row)
     }
+    g.rows -= take
+    total += take
   }
+  a.queue = a.queue.filter((g) => g.rows > 0)
   if (total > 0) a.serialized = null
-  a.queue = []
   return total
 }

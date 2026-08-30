@@ -1,12 +1,13 @@
 import { Bag, mulberry32 } from './bag.ts'
 import {
+  GARBAGE_PER_PLACEMENT,
   computeAttack,
   DEFAULT_ATTACK,
   type AttackConfig,
   type AttackResult,
   type ClearInfo,
   type SpinKind,
-} from './attack'
+} from './attack.ts'
 import { cellsFor, spawnPiece } from './pieces.ts'
 import { DEFAULT_SCORING, clearScore, comboScore, gravitySecondsPerRow, type ScoringConfig } from './scoring.ts'
 import { ghostY, pieceCollides, tryMove, tryRotate } from './srs.ts'
@@ -556,12 +557,17 @@ export class Game {
   }
 
   private applyGarbage(events: GameEvent[]) {
+    // at most GARBAGE_PER_PLACEMENT rows land now; the rest stay owed until
+    // later non-clearing placements
     let total = 0
     for (const g of this.garbageQueue) {
-      this.pushGarbageRows(g.rows, g.hole)
-      total += g.rows
+      const take = Math.min(g.rows, GARBAGE_PER_PLACEMENT - total)
+      if (take <= 0) break
+      this.pushGarbageRows(take, g.hole)
+      g.rows -= take
+      total += take
     }
-    this.garbageQueue = []
+    this.garbageQueue = this.garbageQueue.filter((g) => g.rows > 0)
     if (total > 0) {
       this.maintainCheese()
       events.push({ type: 'garbage', rows: total })
