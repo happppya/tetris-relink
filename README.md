@@ -1,6 +1,6 @@
 # Tetris Relink
 
-[Play here.](https://happppya.github.io/tetris-relinked)
+[Play here.](https://happppya.github.io/tetris-relink)
 
 Tetris relinked is a simple online multiplayer tetris website inspired by the modern features of TETR.IO but made open-source. Star the repository if you enjoyed. PRs and suggestions are welcome.
 
