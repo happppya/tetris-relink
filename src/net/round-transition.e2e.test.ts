@@ -83,7 +83,7 @@ interface RunnerPlayer {
 
 function makeRunnerPlayer(matchId: string, conn: NetConnection, store: LobbyHook, fixedQueue: PieceType[]): RunnerPlayer {
   let client: MatchClient
-  let raw: (msg: ServerMessage) => void
+  let raw: ((msg: ServerMessage) => void) | null = null
   const runner = new GameRunner({
     mode: 'versus',
     gameOptions: {
@@ -118,7 +118,7 @@ function makeRunnerPlayer(matchId: string, conn: NetConnection, store: LobbyHook
   // the constructor's state while every later round arrives through game_start.
   // Replay it so round 1 takes the exact same path as round 2+ and the scripted
   // piece queue means the same thing in every round.
-  raw({ type: 'game_start', round: currentRound, players: [], board: serializeBoard(emptyBoard()) })
+  raw!({ type: 'game_start', round: currentRound, players: [], board: serializeBoard(emptyBoard()) })
   return { runner, client }
 }
 

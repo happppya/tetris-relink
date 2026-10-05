@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Game } from '../engine/game'
 import { MatchClient, type MatchClientState } from './match-client'
 import { emptyBoard, serializeBoard } from '../../shared/board.ts'
-import type { PieceType } from '../engine/types'
+import type { ActivePiece, PieceType } from '../engine/types'
 import type { ClientMessage, ServerMessage } from '../../shared/protocol.ts'
 
 function harness(fixedQueue: PieceType[] = ['I'], initial?: { board: string; pendingGarbage?: number }) {
@@ -103,7 +103,7 @@ describe('MatchClient', () => {
     expect(game.hold).toBeNull()
     // the round opens with a piece already dealt, so the preview starts at the
     // top of the bag rather than wherever the previous round ran out
-    expect(game.active?.type).toBe('I')
+    expect((game.active as ActivePiece | null)?.type).toBe('I')
     expect(game.nextQueue.slice(0, 2)).toEqual(['I', 'T'])
     expect(game.nextQueue).not.toEqual(diedWithQueue)
   })
