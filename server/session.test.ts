@@ -116,6 +116,25 @@ describe('Session', () => {
     expect(s.checkSnapshot('nope', serializeBoard(emptyBoard()))).toEqual({ status: 'ok' })
   })
 
+  it('syncState hands a rejoining player the authority board and its owed garbage', () => {
+    const s = makeSession()
+    expect(s.syncState('a')).toEqual({ board: serializeBoard(emptyBoard()), pendingGarbage: 0 })
+    expect(s.syncState('nope')).toBeNull()
+
+    // a's placement lands on the authority board; that is what they get back
+    const placement: LockEvent = { rows: 0, spin: 'none', piece: 'O', perfectClear: false, combo: 0, b2b: false, streak: 0, cells: [{ x: 3, y: 19 }, { x: 4, y: 19 }] }
+    s.move('a', placement)
+    const state = s.syncState('a')!
+    expect(state.board).not.toBe(serializeBoard(emptyBoard()))
+    expect(state.pendingGarbage).toBe(0)
+    // it is the same board the cross-check pushes, so the rejoin and the
+    // divergence path can never disagree about where the stack is
+    const res = s.checkSnapshot('a', 'nonsense')
+    expect(res.status).toBe('resync')
+    if (res.status !== 'resync') throw new Error('unreachable')
+    expect(res.board).toBe(state.board)
+  })
+
   it('a removed player can rejoin with a fresh authority', () => {
     const s = makeSession()
     const placement: LockEvent = { rows: 0, spin: 'none', piece: 'O', perfectClear: false, combo: 0, b2b: false, streak: 0, cells: [{ x: 3, y: 19 }, { x: 4, y: 19 }] }

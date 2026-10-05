@@ -231,6 +231,23 @@ export class Game {
     return this.bag.peek(5)
   }
 
+  /**
+   * Begin a round on a clean piece supply: a fresh 7-bag, an empty hold, and a
+   * newly spawned piece. Every round of a match starts from here, so nothing
+   * about the round just ended (or the game the player died in) carries over —
+   * the preview, the hold slot and the piece already in flight all restart.
+   */
+  startRound() {
+    this.bag.reset()
+    this.hold = null
+    this.holdBlocked = false
+    this.resetPieceState()
+    this.active = this.spawnNext()
+    // a board with blocks left in the spawn area can't take a piece: hand the
+    // spawn back to the tick, which checks collisions and reports the top-out
+    if (pieceCollides(this.board, this.active)) this.active = null
+  }
+
   get ghostPiece(): ActivePiece | null {
     if (!this.active) return null
     return { ...this.active, y: ghostY(this.board, this.active) }

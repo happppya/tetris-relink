@@ -8,7 +8,7 @@ import { MatchSession } from './match-session.ts'
 import type { MatchEvent } from '../src/engine/match.ts'
 import { roundScores } from './round-scores.ts'
 import { sanitizeLobbySettings, sanitizeName } from '../shared/lobby-settings.ts'
-import type { ClientMessage, LobbyState, ServerMessage, Visibility } from '../shared/protocol.ts'
+import type { ClientMessage, LobbyPlayer, LobbySettings, LobbyState, ServerMessage, Visibility } from '../shared/protocol.ts'
 
 const IDLE_MS = 30 * 60 * 1000
 const IDLE_CHECK_MS = 60 * 1000
@@ -237,6 +237,22 @@ export function startServer(port: number): ServerHandle {
     conns.set(conn.id, conn)
     send(conn.ws, { type: 'rejoin_offer', lobbyCode: lobby.code, matchActive })
     send(conn.ws, { type: 'welcome', selfId: conn.id })
+  }
+
+  /**
+   * The `match_start` payload for one client. `match_start` is what remounts
+   * that client's game screen, and a remount rebuilds its engine from scratch —
+   * so a client rejoining a round already in progress (or coming back from AFK)
+   * would otherwise land on an empty board and place its next piece from
+   * nothing. Hand it the authoritative board it left behind, applied by the
+   * MatchClient before the game loop can run, so the window where a stale board
+   * is live never opens. Spectators have no stack of their own to restore.
+   */
+  const matchStartPayload = (conn: Conn, sess: SessionHandle | undefined, players: LobbyPlayer[], round: number, settings: LobbySettings) => {
+    const base = { matchId: sess?.match.matchId ?? '', players, settings: { ...settings }, round }
+    if (!sess || sess.match.session.isSpectating(conn.id)) return base
+    const sync = sess.match.sync(conn.id)
+    return sync ? { ...base, board: sync.board, pendingGarbage: sync.pendingGarbage } : base
   }
 
   const sessionFor = (conn: Conn, matchId?: string): SessionHandle | undefined => {
@@ -474,8 +490,9 @@ export function startServer(port: number): ServerHandle {
           sess.match.match.revive(conn.id)
         }
         if (sess) {
-          // re-key the client's game screen at the current round
-          send(conn.ws, { type: 'match_start', matchId: sess.match.matchId, players: lobby.memberList, settings: { ...lobby.settings }, round: sess.match.match.round })
+          // re-key the client's game screen at the current round, handing back
+          // the stack it left so a mid-round reconnect resumes, not restarts
+          send(conn.ws, { type: 'match_start', ...matchStartPayload(conn, sess, lobby.memberList, sess.match.match.round, lobby.settings) })
         }
         return
       }
@@ -527,6 +544,8 @@ export function startServer(port: number): ServerHandle {
             match.match.spectate(m.id)
           }
         }
+        // no board on match_start itself: the round is fresh, so every authority
+        // is empty and the client's own new engine already is too
         sendToLobby(lobby, {
           type: 'match_start',
           matchId,
@@ -592,8 +611,9 @@ export function startServer(port: number): ServerHandle {
             entry.match.match.spectate(conn.id)
             entry.match.session.setSpectating(conn.id, true)
           }
-          // re-enter the game on this client (the store keys the game screen on it)
-          send(conn.ws, { type: 'match_start', matchId: entry.match.matchId, players: lobby.memberList, settings: { ...lobby.settings }, round: entry.match.match.round })
+          // re-enter the game on this client (the store keys the game screen on
+          // it), handing back the stack it was sitting out with
+          send(conn.ws, { type: 'match_start', ...matchStartPayload(conn, entry, lobby.memberList, entry.match.match.round, lobby.settings) })
         }
         sendToLobby(lobby, { type: 'player_afk', playerId: conn.id, afk: false })
         broadcastRoster(lobby)

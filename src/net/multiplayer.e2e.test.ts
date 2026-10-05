@@ -90,9 +90,10 @@ interface Player {
   client: MatchClient
 }
 
-function makePlayer(matchId: string, conn: NetConnection, store: LobbyHook, fixedQueue: PieceType[]): Player {
+function makePlayer(matchId: string, conn: NetConnection, store: LobbyHook, fixedQueue: PieceType[], restored?: { board?: string; pendingGarbage?: number }): Player {
   // mirrors the game screen: the engine is created from the lobby settings so
-  // a four-wide lobby opens every board with grey side walls
+  // a four-wide lobby opens every board with grey side walls, and it adopts the
+  // board the server handed back in match_start when this is a rejoin
   const game = new Game({ mode: 'versus', sendsGarbage: true, fourWide: store.getState().match?.settings.fourWide, fixedQueue })
   const client = new MatchClient({
     game,
@@ -102,6 +103,8 @@ function makePlayer(matchId: string, conn: NetConnection, store: LobbyHook, fixe
     selfId: () => store.getState().selfId,
     players: store.getState().match?.players,
     round: store.getState().match?.round ?? 1,
+    initialBoard: restored?.board,
+    initialPendingGarbage: restored?.pendingGarbage,
   })
   return { game, client }
 }
@@ -116,6 +119,7 @@ function tick(player: Player, actions: InputAction[] = [], dir: -1 | 0 | 1 = 0, 
 }
 
 const visible = (game: Game) => serializeBoard(game.board.slice(-20))
+
 
 describe('real client stack against the real server', () => {
   it('plays a full round: both sides see hold and each other\'s boards, garbage flows', async () => {
@@ -599,6 +603,49 @@ describe('leave/disconnect races through the real stack', () => {
     expect(b.errors).toHaveLength(0)
     await waitFor(() => playerA.client.getState().opponents[b.store.getState().selfId!]?.board.length === 20, 'A sees B again')
     expect(server.stats().sessions).toBe(1)
+
+    await closeClient(a)
+    await closeClient(b)
+  })
+
+  it('a mid-round reconnect resumes onto the stack the server still holds', { timeout: 30000 }, async () => {
+    const { a, b, matchId } = await setupMatch()
+    const pa = makePlayer(matchId, a.conn, a.store, ['I'])
+    const pb = makePlayer(matchId, b.conn, b.store, ['T', 'S', 'Z', 'L'])
+    await settle()
+    const bId = b.store.getState().selfId!
+    // the board A currently relays for B, as a serialized string ('' until it lands)
+    const aSees = () => serializeBoard(pa.client.getState().opponents[bId]?.board ?? [])
+
+    // B builds a real stack, so the board is unmistakably not empty
+    tick(pb, ['hardDrop'])
+    tick(pb, ['hardDrop'])
+    tick(pb, [], 0, 30)
+    const left = visible(pb.game)
+    expect(pb.game.board.some((row) => row.some((c) => c !== null))).toBe(true)
+    await waitFor(() => aSees() === left, 'A sees B board')
+
+    // B's socket drops mid-round; the store reconnects and rejoins
+    server.kick(b.store.getState().selfId!)
+    await waitFor(() => b.store.getState().match === null, 'B clears the stale match')
+    await waitFor(() => b.store.getState().status === 'connected' && b.store.getState().match !== null, 'B rejoins the match')
+
+    // the remounted screen builds a brand-new engine from the match_start the
+    // server just sent, which carries the board B left behind
+    const resumed = b.store.getState().match!
+    expect(resumed.board).toBe(left)
+    const pb2 = makePlayer(matchId, b.conn, b.store, ['T', 'S', 'Z', 'L'], { board: resumed.board, pendingGarbage: resumed.pendingGarbage })
+    expect(visible(pb2.game)).toBe(left)
+    // straight to the right board, with no divergence round trip to correct it
+    expect(pb2.client.resyncs).toBe(0)
+
+    // so the next placement is a normal one: the server accepts it and the
+    // opponent relays a board that still agrees with this client
+    tick(pb2, ['hardDrop'])
+    tick(pb2, [], 0, 30)
+    await waitFor(() => aSees() === visible(pb2.game), 'A sees B continue from the restored board')
+    expect(pb2.client.resyncs).toBe(0)
+    expect(b.errors).toHaveLength(0)
 
     await closeClient(a)
     await closeClient(b)

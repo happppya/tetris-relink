@@ -17,6 +17,9 @@ import { isMatchPoint } from '../../shared/lobby-settings.ts'
 import type { GameEvent } from '../engine/game'
 import type { LobbyPlayer, LobbySettings, TargetMode } from '../../shared/protocol.ts'
 
+/** how long the "board restored" acknowledgement stays up after a reconnect */
+const RESTORED_MS = 2500
+
 /** how long the ranked round scoreboard stays up between rounds */
 const INTERMISSION_MS = 4000
 
@@ -173,6 +176,10 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
   const [wins, setWins] = useState<Record<string, number>>({})
   const [finished, setFinished] = useState(false)
   const [intermission, setIntermission] = useState<Intermission | null>(null)
+  // shown briefly when this client's stack was handed back by the server on the
+  // way in (a reconnect or an AFK return), so the resumed board reads as
+  // deliberate rather than as input having silently started working again
+  const [restored, setRestored] = useState(false)
   // spectating is server-driven (lobby choice before the match, or auto when
   // the player dies mid-game); the loop must not recreate the game when it
   // flips, so it reads the live value from this ref
@@ -204,6 +211,7 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
     let stopped = false
     let endTimer: ReturnType<typeof setTimeout> | null = null
     let intermissionTimer: ReturnType<typeof setTimeout> | null = null
+    let restoreTimer: ReturnType<typeof setTimeout> | null = null
     let raf = 0
     let last = performance.now()
     let lastHudUpdate = 0
@@ -245,7 +253,15 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
       selfId: () => useLobby.getState().selfId,
       players: match.players,
       round: match.round,
+      // a screen remount builds a new engine, so a mid-match reconnect resumes
+      // onto the board the server still holds rather than an empty one
+      initialBoard: match.board,
+      initialPendingGarbage: match.pendingGarbage,
     })
+    if (match.board && runner.game.board.some((row) => row.some((cell) => cell !== null))) {
+      setRestored(true)
+      restoreTimer = setTimeout(() => setRestored(false), RESTORED_MS)
+    }
     const unsubscribeState = client.subscribe((s) => {
       opponentsRef.current = s.opponents
       setOpponents(s.opponents)
@@ -374,6 +390,7 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
       runner.abort()
       if (endTimer) clearTimeout(endTimer)
       if (intermissionTimer) clearTimeout(intermissionTimer)
+      if (restoreTimer) clearTimeout(restoreTimer)
     }
     // NOTE: targetMode and onExit are deliberately NOT dependencies — targetMode
     // changes on every targeting switch, and onExit is a fresh closure on every
@@ -478,6 +495,7 @@ export function MultiplayerGameScreen({ onExit }: { onExit: () => void }) {
           </div>
         </div>
         {error && <p className="text-xs text-red-400">{error}</p>}
+        {restored && <p className="text-xs text-yellow-400">RECONNECTED · BOARD RESTORED</p>}
         {intermission && <IntermissionOverlay intermission={intermission} players={match.players} settings={match.settings} final={finished} />}
         <button disabled={finished} onClick={leave} className="mt-4 border border-neutral-700 px-3 py-2 text-xs text-neutral-400 disabled:opacity-40">LEAVE</button>
       </aside>

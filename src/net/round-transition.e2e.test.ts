@@ -5,7 +5,7 @@ import { NetConnection } from './connection'
 import { createLobbyStore, type LobbyHook } from '../state/lobby'
 import { MatchClient } from './match-client'
 import { GameRunner, STEP_MS } from '../game/runner'
-import { serializeBoard } from '../../shared/board.ts'
+import { serializeBoard, emptyBoard } from '../../shared/board.ts'
 import { BOARD_W, type InputAction, type PieceType } from '../engine/types'
 import type { LobbySettings, ServerMessage } from '../../shared/protocol.ts'
 
@@ -83,6 +83,7 @@ interface RunnerPlayer {
 
 function makeRunnerPlayer(matchId: string, conn: NetConnection, store: LobbyHook, fixedQueue: PieceType[]): RunnerPlayer {
   let client: MatchClient
+  let raw: (msg: ServerMessage) => void
   const runner = new GameRunner({
     mode: 'versus',
     gameOptions: {
@@ -97,7 +98,10 @@ function makeRunnerPlayer(matchId: string, conn: NetConnection, store: LobbyHook
     game: runner.game,
     matchId,
     send: (msg) => conn.send(msg),
-    onMessage: (handler) => conn.onMessage(handler),
+    onMessage: (handler) => {
+      raw = handler
+      return conn.onMessage(handler)
+    },
     selfId: () => store.getState().selfId,
     players: store.getState().match?.players,
     round: store.getState().match?.round ?? 1,
@@ -109,6 +113,12 @@ function makeRunnerPlayer(matchId: string, conn: NetConnection, store: LobbyHook
       runner.reset()
     }
   })
+  // the server's round-1 game_start races this client's creation and is normally
+  // missed (the same race player_spectating has), so the game would start from
+  // the constructor's state while every later round arrives through game_start.
+  // Replay it so round 1 takes the exact same path as round 2+ and the scripted
+  // piece queue means the same thing in every round.
+  raw({ type: 'game_start', round: currentRound, players: [], board: serializeBoard(emptyBoard()) })
   return { runner, client }
 }
 
@@ -148,6 +158,9 @@ describe('round transitions through the real GameRunner (game screen flow)', () 
     const pb = makeRunnerPlayer(matchId, b.conn, b.store, ['T'])
     await settle() // game_start (round 1) lands
     const bId = b.store.getState().selfId!
+    // the scripted head every round must open on: the round's first piece is
+    // already dealt, so the preview starts just past it
+    const openingA = pa.runner.game.nextQueue.slice(0, 4)
 
     for (let round = 1; round <= 2; round++) {
       // survivor A scores a double (non-zero) through the real runner
@@ -156,6 +169,9 @@ describe('round transitions through the real GameRunner (game screen flow)', () 
       pa.client.maybeSendSnapshot()
       expect(pa.runner.game.lines).toBe(2)
       await settle(150) // let A's locks reach the server before B dies
+
+      // the queues the round ends on: the next round must not continue from these
+      const endB = pb.runner.game.nextQueue
 
       // B tops out: the client signals death (a real game over sends this)
       pb.client.sendTopout()
@@ -166,6 +182,16 @@ describe('round transitions through the real GameRunner (game screen flow)', () 
       await waitFor(() => pb.client.getState().round === round + 1, `B round ${round + 1}`)
       expect(pa.client.getState().finished).toBe(false)
       expect(pb.client.getState().finished).toBe(false)
+
+      // the new round opens on a clean slate: hold is empty and each player is
+      // dealt a fresh piece from a fresh bag, not the one the last round ran out
+      expect(pa.runner.game.hold).toBeNull()
+      expect(pb.runner.game.hold).toBeNull()
+      expect(pa.runner.game.active?.type).toBe('I')
+      expect(pb.runner.game.active?.type).toBe('T')
+      // A's scripted pieces are dealt from the top again, B's bag is a new one
+      expect(pa.runner.game.nextQueue.slice(0, 4)).toEqual(openingA)
+      expect(pb.runner.game.nextQueue).not.toEqual(endB)
 
       // the scoreboard shows the running match score (rounds won), matching the
       // wins tally and putting the winner at the current round count

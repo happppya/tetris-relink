@@ -161,6 +161,19 @@ export class Session {
     return { status: 'resync', board: authoritative, pendingGarbage: pendingGarbage(p.auth) }
   }
 
+  /**
+   * The authoritative board and owed garbage for a player, unconditionally.
+   * A client that rebuilds its engine (rejoin, AFK-return) has no board of its
+   * own, so this is what it adopts on the way back in. It stays correct across
+   * a disconnect: a dropped socket only marks the player spectating, it never
+   * removes them from the session.
+   */
+  syncState(id: string): { board: string; pendingGarbage: number } | null {
+    const p = this.players.get(id)
+    if (!p) return null
+    return { board: serializeAuthority(p.auth), pendingGarbage: pendingGarbage(p.auth) }
+  }
+
   /** A player returns from AFK: re-enter the session with a fresh authority. */
   add(member: SessionMember): void {
     if (this.players.has(member.id)) return

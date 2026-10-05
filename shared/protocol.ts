@@ -87,7 +87,14 @@ export type ServerMessage =
   | { type: 'roster_update'; players: LobbyPlayer[]; hostId: string }
   | { type: 'settings_update'; settings: LobbySettings }
   | { type: 'lobby_list'; lobbies: PublicLobbyInfo[] }
-  | { type: 'match_start'; matchId: string; players: LobbyPlayer[]; settings: LobbySettings; round: number }
+  /**
+   * `board`/`pendingGarbage` carry the server's authoritative copy of THIS
+   * client's stack. Sent on a rejoin or AFK-return (the client rebuilds its
+   * engine from scratch when the game screen remounts) so it comes back to
+   * the board it left rather than an empty one. Absent at match start, where
+   * the board is empty anyway.
+   */
+  | { type: 'match_start'; matchId: string; players: LobbyPlayer[]; settings: LobbySettings; round: number; board?: Board; pendingGarbage?: number }
   | { type: 'rejoin_offer'; lobbyCode: string; matchActive: boolean }
   | { type: 'board_update'; playerId: string; board: Board; score: number; pendingGarbage: number; round: number; lines?: number; hold?: PieceType | null; next?: PieceType[] }
   | { type: 'game_end'; round: number; winnerId: string | null; eliminatedIds: string[]; wins: Record<string, number>; scores: Record<string, number> }

@@ -25,4 +25,36 @@ describe('Bag', () => {
     const dealt = Array.from({ length: 5 }, () => bag.next())
     expect(dealt).toEqual(peeked)
   })
+
+  it('reset deals a full fresh bag instead of continuing the drained one', () => {
+    const bag = new Bag(mulberry32(7))
+    // drain well past a full bag, leaving a mid-shuffle remainder
+    for (let i = 0; i < 20; i++) bag.next()
+    const continuation = bag.peek(5)
+
+    bag.reset()
+    const window = Array.from({ length: 7 }, () => bag.next())
+    // a full 7-bag, and not the same run of pieces the drained bag would have given
+    expect([...window].sort()).toEqual([...PIECE_TYPES].sort())
+    expect(window.slice(0, 5)).not.toEqual(continuation)
+  })
+
+  it('reset re-arms the fixed prefix so scripted pieces come back', () => {
+    const bag = new Bag(mulberry32(3), ['I', 'O'])
+    expect(bag.next()).toBe('I')
+    expect(bag.next()).toBe('O')
+    bag.reset()
+    expect(bag.next()).toBe('I')
+    expect(bag.next()).toBe('O')
+  })
+
+  it('reset is repeatable and keeps the 7-piece guarantee', () => {
+    const bag = new Bag(mulberry32(11), ['T'])
+    for (let round = 0; round < 3; round++) {
+      expect(bag.next()).toBe('T')
+      const seq = Array.from({ length: 7 }, () => bag.next())
+      expect([...seq].sort()).toEqual([...PIECE_TYPES].sort())
+      bag.reset()
+    }
+  })
 })

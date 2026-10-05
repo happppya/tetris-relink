@@ -5,7 +5,7 @@ import { emptyBoard, serializeBoard } from '../../shared/board.ts'
 import type { PieceType } from '../engine/types'
 import type { ClientMessage, ServerMessage } from '../../shared/protocol.ts'
 
-function harness(fixedQueue: PieceType[] = ['I']) {
+function harness(fixedQueue: PieceType[] = ['I'], initial?: { board: string; pendingGarbage?: number }) {
   const game = new Game({ mode: 'versus', sendsGarbage: true, fixedQueue })
   const sent: ClientMessage[] = []
   let handler: ((msg: ServerMessage) => void) | null = null
@@ -20,6 +20,8 @@ function harness(fixedQueue: PieceType[] = ['I']) {
       }
     },
     selfId: () => 'a',
+    initialBoard: initial?.board,
+    initialPendingGarbage: initial?.pendingGarbage,
   })
   const states: MatchClientState[] = []
   client.subscribe((s) => states.push(s))
@@ -64,6 +66,65 @@ describe('MatchClient', () => {
     expect(game.board.every((row) => row.every((c) => c === null))).toBe(true)
     expect(client.getState().opponents).toEqual({})
     expect(client.getState().round).toBe(2)
+  })
+
+  it('game_start opens the round on a fresh bag, hold and piece', () => {
+    const { game, feed } = harness(['I', 'I', 'T'])
+    const opening = { active: { ...game.active! }, head: game.nextQueue.slice(0, 2) }
+    // play the round out: hold a piece, place pieces, leave one in flight
+    game.tick({ dir: 0, softDrop: false, actions: ['hold'] })
+    for (let i = 0; i < 3; i++) game.tick({ dir: 0, softDrop: false, actions: ['hardDrop'] })
+    game.tick({ dir: -1, softDrop: false, actions: [] })
+    game.tick({ dir: -1, softDrop: false, actions: [] })
+    expect(game.hold).not.toBeNull()
+    expect(game.active).not.toEqual(opening.active)
+
+    feed(gameStart(2))
+    // nothing from the round that just ended survives: the hold slot is empty and
+    // a piece is dealt fresh at the spawn, not the one left in flight
+    expect(game.hold).toBeNull()
+    expect(game.holdBlocked).toBe(false)
+    expect(game.active).toEqual(opening.active)
+    // and the preview is the top of a fresh bag, not the tail of the last one
+    expect(game.nextQueue.slice(0, 2)).toEqual(opening.head)
+  })
+
+  it('a revived player is dealt a new piece, not the one they died holding', () => {
+    const { game, feed } = harness(['I', 'I', 'T'])
+    game.tick({ dir: 0, softDrop: false, actions: ['hold'] })
+    game.tick({ dir: 0, softDrop: false, actions: ['hardDrop'] })
+    const diedWithQueue = game.nextQueue
+    // a top-out leaves the engine with no active piece to carry into the round
+    game.active = null
+    game.over = true
+
+    feed(gameStart(2))
+    expect(game.over).toBe(false)
+    expect(game.hold).toBeNull()
+    // the round opens with a piece already dealt, so the preview starts at the
+    // top of the bag rather than wherever the previous round ran out
+    expect(game.active?.type).toBe('I')
+    expect(game.nextQueue.slice(0, 2)).toEqual(['I', 'T'])
+    expect(game.nextQueue).not.toEqual(diedWithQueue)
+  })
+
+  it('adopts the board the server handed back on construction, before anything can play', () => {
+    // a reconnecting client mounts a brand-new engine; this is the board it left
+    const left = emptyBoard().map((r, i) => (i === 19 ? ['T', ...r.slice(1)] : r))
+    const { game } = harness(['I'], { board: serializeBoard(left), pendingGarbage: 4 })
+
+    expect(serializeBoard(game.board.slice(-20))).toBe(serializeBoard(left))
+    // the garbage it still owed is back too, not silently dropped
+    expect(game.pendingGarbage).toBe(4)
+    // and the engine is usable immediately: no empty-board window to place from
+    expect(game.over).toBe(false)
+    expect(game.active).not.toBeNull()
+  })
+
+  it('a client with no handed-back board starts empty, as at match start', () => {
+    const { game } = harness(['I'])
+    expect(game.board.every((row) => row.every((c) => c === null))).toBe(true)
+    expect(game.pendingGarbage).toBe(0)
   })
 
   it('drops board relays from a previous round (stale carryover)', () => {

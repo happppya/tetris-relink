@@ -31,12 +31,26 @@ export function isResettable(rng: Rng): rng is ResettableRng {
 export class Bag {
   private queue: PieceType[] = []
   private rng: Rng
+  private readonly prefix: readonly PieceType[]
 
   constructor(rng: Rng, prefix: readonly PieceType[] = []) {
     this.rng = rng
+    this.prefix = prefix
     this.refill()
     // fixed pieces (drills) are consumed before any randomness
     this.queue.unshift(...prefix)
+  }
+
+  /**
+   * Start a brand-new bag: the pending queue is dropped and a fresh shuffle
+   * dealt, and any fixed prefix is re-armed. Used between rounds of a match,
+   * where the piece order must restart with the new round rather than continue
+   * from wherever the previous one ran out.
+   */
+  reset() {
+    this.queue = []
+    this.refill()
+    this.queue.unshift(...this.prefix)
   }
 
   private refill() {

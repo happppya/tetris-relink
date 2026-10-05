@@ -21,6 +21,7 @@ export class MatchSession {
   target(id: string, mode: TargetMode, targetId?: string): SessionEvent[] { return this.session.setTarget(id, mode, targetId) }
   snapshot(id: string, board: string) { return this.session.checkSnapshot(id, board) }
   pending(id: string): number { return this.session.pendingGarbageOf(id) }
+  sync(id: string) { return this.session.syncState(id) }
   remove(id: string): void { this.session.remove(id) }
   freshBoard(): Board { return serializeBoard(this.settings.fourWide ? fourWideBoard() : emptyBoard()) }
 }

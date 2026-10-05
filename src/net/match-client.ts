@@ -2,7 +2,7 @@ import type { Game, GameEvent } from '../engine/game'
 import { BOARD_W, HIDDEN_H, type ActivePiece, type Cell, type PieceType } from '../engine/types'
 import { cellsFor } from '../engine/pieces'
 import { deserializeBoard, serializeBoard } from '../../shared/board.ts'
-import type { ClientMessage, LockEvent, ServerMessage, TargetMode } from '../../shared/protocol.ts'
+import type { Board, ClientMessage, LockEvent, ServerMessage, TargetMode } from '../../shared/protocol.ts'
 
 export interface OpponentState {
   board: Cell[][]
@@ -57,6 +57,15 @@ export interface MatchClientHooks {
   players?: { id: string; name: string; spectating?: boolean }[]
   /** current round from match_start, so a rejoin lands in the right round */
   round?: number
+  /**
+   * The server's authoritative board for this client, from the `match_start` that
+   * (re)builds the game screen. A remount constructs a brand-new engine, so a
+   * client rejoining a round in progress has no board of its own; it adopts this
+   * one in the constructor, before the game loop can place a piece from a stale
+   * one. Absent at match start, where the round is empty anyway.
+   */
+  initialBoard?: Board
+  initialPendingGarbage?: number
 }
 
 const SNAPSHOT_INTERVAL_FRAMES = 30
@@ -119,6 +128,9 @@ export class MatchClient {
       }
     }
     this.state = { ...this.state, spectating: this.spectating, opponents, round: hooks.round ?? 1 }
+    // applied before the message subscription and long before the game screen's
+    // loop runs, so no lock is ever derived from the empty board we start with
+    if (hooks.initialBoard) this.applyAuthoritativeBoard(hooks.initialBoard, hooks.initialPendingGarbage ?? 0)
     this.unsubscribe = hooks.onMessage((msg) => this.handle(msg))
   }
 
@@ -206,6 +218,33 @@ export class MatchClient {
     }
   }
 
+  /**
+   * Adopt a server board as the visible half of the engine, re-queuing whatever
+   * garbage it still owes. The hidden rows above it are rebuilt clean rather
+   * than carried over: a topped-out board has blocks piled into them, and
+   * reusing them made the revived player's spawn collide with residual blocks
+   * and instantly top out again every round.
+   *
+   * Only the board and the garbage queue change — the piece supply is the
+   * caller's business (a new round redeals it, a rejoin keeps what it had).
+   */
+  private applyAuthoritativeBoard(serialized: Board, owedGarbage: number): void {
+    const board = deserializeBoard(serialized) as Cell[][]
+    if (board.length !== 20 || !board.every((row) => row.length === BOARD_W)) return
+    const snap = this.game.snapshot()
+    const walled = board[0]?.[0] === 'W'
+    const hidden: Cell[][] = Array.from({ length: HIDDEN_H }, () => {
+      const row: Cell[] = Array<Cell>(BOARD_W).fill(null)
+      if (walled) {
+        for (let x = 0; x < 3; x++) row[x] = 'W'
+        for (let x = BOARD_W - 3; x < BOARD_W; x++) row[x] = 'W'
+      }
+      return row
+    })
+    this.game.restore({ ...snap, board: [...hidden, ...board], garbageQueue: [] })
+    if (owedGarbage > 0) this.game.receiveGarbage(owedGarbage, false, 0)
+  }
+
   /** Throttled (~10Hz) snapshot of the visible board for server cross-checking and opponent relay. */
   maybeSendSnapshot(): void {
     if (this.spectating) return
@@ -250,40 +289,28 @@ export class MatchClient {
         })
         break
       case 'game_start': {
-        const board = deserializeBoard(msg.board) as Cell[][]
-        if (board.length === 20 && board.every((row) => row.length === 10)) {
-          const snap = this.game.snapshot()
-          // a fresh round is a brand-new board: prepend clean hidden rows (empty,
-          // walled only in four-wide) instead of carrying the previous round's
-          // hidden rows over. A topped-out board has blocks piled into the hidden
-          // top rows, so reusing them made the revived player's spawn collide
-          // with residual blocks and instantly top out again every round.
-          const walled = board[0]?.[0] === 'W'
-          const hidden: Cell[][] = Array.from({ length: HIDDEN_H }, () => {
-            const row: Cell[] = Array<Cell>(BOARD_W).fill(null)
-            if (walled) {
-              for (let x = 0; x < 3; x++) row[x] = 'W'
-              for (let x = BOARD_W - 3; x < BOARD_W; x++) row[x] = 'W'
-            }
-            return row
-          })
-          this.game.restore({
-            ...snap,
-            board: [...hidden, ...board],
-            score: 0,
-            lines: 0,
-            piecesPlaced: 0,
-            frames: 0,
-            sentLines: 0,
-            over: false,
-            garbageQueue: [],
-            hold: null,
-            holdBlocked: false,
-            combo: 0,
-            streak: 0,
-            b2bActive: false,
-          })
-        }
+        // a fresh round is a brand-new board, so the per-round counters reset too
+        this.applyAuthoritativeBoard(msg.board, 0)
+        const snap = this.game.snapshot()
+        this.game.restore({
+          ...snap,
+          score: 0,
+          lines: 0,
+          piecesPlaced: 0,
+          frames: 0,
+          sentLines: 0,
+          over: false,
+          garbageQueue: [],
+          hold: null,
+          holdBlocked: false,
+          combo: 0,
+          streak: 0,
+          b2bActive: false,
+        })
+        // the restore above still carries the old bag, hold and in-flight piece
+        // across: deal the round's opening state from scratch so the new round
+        // never inherits pieces from the one that just ended
+        this.game.startRound()
         // a fresh round resets the engine's frame clock to 0, so the snapshot
         // clock must follow or the revived player's first relay is throttled by
         // the previous round's frame count (frames reset but lastSnapshot didn't)
@@ -388,12 +415,7 @@ export class MatchClient {
         // garbage still owed) so a genuinely-desynced client converges. The
         // client keeps its own engine score (the server no longer tracks scores).
         this.resyncs++
-        const board = deserializeBoard(msg.board) as Cell[][]
-        if (board.length === 20 && board.every((row) => row.length === 10)) {
-          const snap = this.game.snapshot()
-          this.game.restore({ ...snap, board: [...snap.board.slice(0, HIDDEN_H), ...board], garbageQueue: [] })
-          if (msg.pendingGarbage > 0) this.game.receiveGarbage(msg.pendingGarbage, false, 0)
-        }
+        this.applyAuthoritativeBoard(msg.board, msg.pendingGarbage)
         this.setState({ error: null })
         break
       }
